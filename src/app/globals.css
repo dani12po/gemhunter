@@ -1,0 +1,150 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── CSS Variables ─── */
+:root {
+  --bg-dark:      #1a1a1a;
+  --bg-medium:    #242424;
+  --bg-light:     #2e2e2e;
+  --bg-lighter:   #383838;
+  --border:       #444444;
+  --border-light: #555555;
+  --text-primary:   #e8e8e8;
+  --text-secondary: #aaaaaa;
+  --text-muted:     #777777;
+  --accent:     #f5a623;
+  --accent-dim: #c7871c;
+  --green:      #5cb85c;
+  --green-dim:  #449944;
+  --red:        #d9534f;
+  --red-dim:    #b03030;
+  --blue:       #5b9bd5;
+}
+
+/* ─── Base ─── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg-dark);
+  color: var(--text-primary);
+  font-family: 'Trebuchet MS', Verdana, Geneva, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ─── FIX BUG #2: Keyframes untuk spinner SwapModal ─── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes jup-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+/* Hide number input spinners in all swap inputs */
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Hide specific export button as requested */
+body > div > div:nth-child(2) > div:nth-child(2) > button:nth-child(2) {
+  display: none !important;
+}
+
+/* Hide manual refresh button (3rd button) - already has auto-refresh */
+body > div > div:nth-child(2) > div:nth-child(2) > button:nth-child(3) {
+  display: none !important;
+}
+
+/* ─── Classic button ─── */
+.btn-classic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 14px;
+  background: var(--bg-lighter);
+  border: 1px solid var(--border-light);
+  border-top-color: #666;
+  border-bottom-color: #333;
+  color: var(--text-primary);
+  font-family: 'Trebuchet MS', Verdana, sans-serif;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background 0.1s;
+  white-space: nowrap;
+}
+.btn-classic:hover  { background: #404040; }
+.btn-classic:active { border-top-color: #333; border-bottom-color: #666; }
+.btn-classic:disabled { opacity: 0.35; cursor: default; }
+
+.btn-accent {
+  background: var(--accent-dim);
+  border-color: #a06010;
+  border-top-color: var(--accent);
+  color: #fff;
+}
+.btn-accent:hover { background: var(--accent); }
+
+.btn-green {
+  background: var(--green-dim);
+  border-color: #336633;
+  border-top-color: var(--green);
+  color: #fff;
+}
+.btn-green:hover { background: var(--green); }
+
+.btn-red {
+  background: var(--red-dim);
+  border-color: #882222;
+  border-top-color: var(--red);
+  color: #fff;
+}
+.btn-red:hover { background: var(--red); }
+
+/* ─── Wallet adapter override ─── */
+.wallet-adapter-button {
+  background: var(--bg-lighter) !important;
+  border: 1px solid var(--border-light) !important;
+  border-top-color: #666 !important;
+  border-bottom-color: #333 !important;
+  border-radius: 0 !important;
+  font-family: 'Trebuchet MS', Verdana, sans-serif !important;
+  font-size: 12px !important;
+  font-weight: bold !important;
+  color: var(--text-primary) !important;
+  height: 32px !important;
+  padding: 0 14px !important;
+  transition: background 0.1s !important;
+}
+.wallet-adapter-button:hover { background: #404040 !important; }
+.wallet-adapter-button-trigger { background: var(--accent-dim) !important; }
+
+/* ─── Utility ─── */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ─── Responsive grid untuk TokenScanner ─── */
+@media (max-width: 900px) {
+  /* Override inline grid di TokenScanner */
+  .scanner-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .stats-grid   { grid-template-columns: repeat(3, 1fr) !important; }
+  .filter-grid  { grid-template-columns: repeat(4, 1fr) !important; }
+}
+@media (max-width: 600px) {
+  .scanner-grid { grid-template-columns: 1fr !important; }
+  .stats-grid   { grid-template-columns: repeat(2, 1fr) !important; }
+  .filter-grid  { grid-template-columns: repeat(2, 1fr) !important; }
+}
+
+/* Hide scrollbar for TokenSelectorModal */
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
