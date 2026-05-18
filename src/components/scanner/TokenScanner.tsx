@@ -20,6 +20,7 @@ interface TokenScannerProps {
   stats: { total: number; gems: number; mid: number; boosted: number; new: number };
   onExport: () => void;
   onRefresh: () => void;
+  preset: string; // TAMBAHAN: preset untuk menentukan filter default yang digunakan saat scan, bisa 'gem', 'safe', 'degen', 'custom', atau 'narrative'
 }
 
 const labelMap: Record<keyof FilterData, string> = {
@@ -40,11 +41,17 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
   tokens, loading, error, searchQuery, onSearchChange,
   filter, onFilterChange, onSwapOpen, swapToken, onSwapClose,
   stats, onExport, onRefresh,
+  preset, // TAMBAHAN: menerima preset dari parent component untuk menentukan filter default
 }) => {
   const [currentPage, setCurrentPage] = React.useState(1);
   const tokensPerPage = 21;
   const totalPages    = Math.ceil(tokens.length / tokensPerPage);
 
+  // -----------------------------------------------------------------------
+  // TAMBAHAN: STATE UNTUK FILTER NARRATIVE
+  const [selectedNarrative, setSelectedNarrative] = React.useState<string>('all');
+  // -----------------------------------------------------------------------
+  
   // Reset to first page when token list changes (fixes "data exists but not displayed")
   React.useEffect(() => {
     setCurrentPage(1);
@@ -53,6 +60,69 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
   const updateFilter = (key: keyof FilterData, value: number) => {
     onFilterChange({ ...filter, [key]: value });
   };
+
+  // -------------------------------------------------------------------
+  // TAMBAHAN: DETEKSI NARRATIVE OTOMATIS BERDASARKAN NAMA/SIMBOL TOKEN
+  const detectNarrative = (token: TokenData): string => {
+    const name = token.nama?.toLowerCase() || '';
+    const symbol = token.simbol?.toLowerCase() || '';
+    
+    if (name.includes('ai') || name.includes('agent') || symbol.includes('ai')) return '🤖 AI Agent';
+    if (name.includes('cat') || name.includes('dog') || name.includes('pepe') || name.includes('meme')) return '🐱 Meme Coin';
+    if (name.includes('depin') || name.includes('network')) return '🏗️ DePIN';
+    if (name.includes('real') || name.includes('asset') || symbol.includes('rwa')) return '🏦 RWA';
+    if (name.includes('game') || name.includes('play')) return '🎮 Gaming';
+    if (name.includes('defi') || name.includes('swap')) return '💱 DeFi';
+    if (name.includes('social') || name.includes('friend')) return '👥 Social';
+    if (name.includes('layer') || name.includes('l2')) return '⚡ Layer 2';
+    if (name.includes('launch') || name.includes('presale')) return '🚀 Launchpad';
+    
+    return '🆕 New Token';
+  };
+
+  const getTrendingNarrative = (tokenList: TokenData[]): string => {
+    const narratives: { [key: string]: number } = {};
+    
+    tokenList.forEach(token => {
+      const narrative = detectNarrative(token);
+      narratives[narrative] = (narratives[narrative] || 0) + 1;
+    });
+    
+    let topNarrative = '📖 Unknown';
+    let topCount = 0;
+    
+    Object.entries(narratives).forEach(([narrative, count]) => {
+      if (count > topCount) {
+        topCount = count;
+        topNarrative = narrative;
+      }
+    });
+    
+    return topNarrative;
+  };
+
+  const getUniqueNarratives = (tokenList: TokenData[]): { narrative: string; count: number }[] => {
+  const narratives: { [key: string]: number } = {};
+  
+  tokenList.forEach(token => {
+    const narrative = detectNarrative(token);
+    narratives[narrative] = (narratives[narrative] || 0) + 1;
+  });
+  
+  // Urutkan berdasarkan jumlah (descending) dan tambahkan 'all' di awal
+  const sorted = Object.entries(narratives)
+    .sort((a, b) => b[1] - a[1])
+    .map(([narrative, count]) => ({ narrative, count }));
+  
+    return [{ narrative: 'all', count: tokenList.length }, ...sorted];
+  };
+
+  // TAMBAHKAN fungsi untuk filter token berdasarkan narasi
+  const filterTokensByNarrative = (tokenList: TokenData[], narrative: string): TokenData[] => {
+    if (narrative === 'all') return tokenList;
+    return tokenList.filter(token => detectNarrative(token) === narrative);
+  };
+  // -------------------------------------------------------------------
 
   const statItems = [
     { label: 'Total',       value: stats.total,   color: '#e8e8e8', accent: '#555' },
@@ -197,6 +267,106 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
           ))}
         </div>
       </div>
+        
+      {/* ---------------------------------------------------------------- */}
+      {/* TAMBAHAN: Tren Narrative - HANYA TAMPIL SAAT MENU NARRATIVE DIPILIH */}
+      {preset === 'narrative' && tokens.length > 0 && (
+        <div style={{
+          background: '#1e1e1e',
+          border: '1px solid #3a3a3a',
+          borderTop: '2px solid #f5a623',
+          padding: '12px 14px',
+          marginBottom: 16,
+        }}>
+          <div style={{ color: '#777', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>
+            📖 Narrative Detection
+          </div>
+          
+          {/* Trending Narrative Badge */}
+          <div style={{
+            background: '#2a1a0a',
+            border: '1px solid #f5a623',
+            borderRadius: 8,
+            padding: '8px 12px',
+            marginBottom: 12,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}>
+            <span style={{ color: '#f5a623', fontSize: 12, fontWeight: 'bold' }}>🔥 Trending:</span>
+            <span style={{ color: '#e8e8e8', fontSize: 13, fontFamily: 'monospace' }}>
+              {getTrendingNarrative(tokens)}
+            </span>
+            <span style={{ color: '#666', fontSize: 10 }}>
+              {tokens.filter(t => detectNarrative(t) === getTrendingNarrative(tokens)).length} tokens
+            </span>
+          </div>
+          
+          {/* Filter by Narrative Buttons */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ color: '#666', fontSize: 10, marginBottom: 8 }}>Filter by Narrative:</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {getUniqueNarratives(tokens).map(({ narrative, count }) => (
+                <button
+                  key={narrative}
+                  onClick={() => {
+                    setSelectedNarrative(narrative);
+                    setCurrentPage(1);
+                  }}
+                  style={{
+                    background: selectedNarrative === narrative ? '#f5a623' : '#2a2a2a',
+                    border: `1px solid ${selectedNarrative === narrative ? '#f5a623' : '#444'}`,
+                    color: selectedNarrative === narrative ? '#1a1a1a' : '#e8e8e8',
+                    padding: '4px 12px',
+                    borderRadius: 20,
+                    fontSize: 11,
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  {narrative === 'all' ? '📋 All' : narrative}
+                  <span style={{
+                    background: selectedNarrative === narrative ? '#1a1a1a' : '#444',
+                    color: selectedNarrative === narrative ? '#f5a623' : '#aaa',
+                    borderRadius: 10,
+                    padding: '1px 6px',
+                    fontSize: 9,
+                    fontWeight: 'normal',
+                  }}>
+                    {count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+          
+          {/* New Born Token Alert */}
+          <div style={{
+            marginTop: 12,
+            background: '#0a2a1a',
+            border: '1px solid #22c55e44',
+            borderRadius: 6,
+            padding: '8px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}>
+            <span style={{ fontSize: 16 }}>✨</span>
+            <div>
+              <span style={{ color: '#22c55e', fontSize: 11, fontWeight: 'bold' }}>NEW BORN DETECTED!</span>
+              <span style={{ color: '#888', fontSize: 10, marginLeft: 8 }}>
+                {tokens.filter(t => t.ageHours < 1).length} tokens launched in last hour
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* --------------------------------------------------------------- */}
 
       {/* ── Result summary ── */}
       {!loading && tokens.length > 0 && (
@@ -233,11 +403,23 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
       {!loading && tokens.length > 0 && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 24 }}>
-            {tokens
+            {/* {tokens
               .slice((currentPage - 1) * tokensPerPage, currentPage * tokensPerPage)
               .map(token => (
                 <TokenCard key={token.address} token={token} onSwap={() => onSwapOpen(token)} />
-              ))}
+              ))} */}
+
+              {/* --------------------------------- */}
+              {/* Jika preset narrative, gunakan filter narasi, jika tidak gunakan tokens biasa */}
+              {(preset === 'narrative' 
+                ? filterTokensByNarrative(tokens, selectedNarrative)
+                : tokens
+              )
+                .slice((currentPage - 1) * tokensPerPage, currentPage * tokensPerPage)
+                .map(token => (
+                  <TokenCard key={token.address} token={token} onSwap={() => onSwapOpen(token)} />
+                ))}
+                {/* --------------------------------- */}
           </div>
 
           {/* Pagination */}

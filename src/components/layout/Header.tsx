@@ -22,9 +22,11 @@ const navItems = [
   { label: 'Scanner', href: '/', exact: true },
   { label: '🪙 Create Token', href: '/create-token', exact: false },
   { label: '💧 Liquidity', href: '/liquidity', exact: false },
+  { label: '🔥 Burn Liquidity', href: '/burn-liquidity', exact: false } // BARU -> Menu Burn Liq.
 ];
 
-const presets = ['gem', 'safe', 'degen', 'custom'];
+// TAMBAHAN: MENU NARRATIVE (untuk menampilkan cerita atau analisis mendalam tentang token tertentu, bisa diisi dengan artikel, grafik, dll. Konten ini bisa dibuat secara manual untuk beberapa token populer atau berdasarkan template yang diisi otomatis jika data tersedia)
+const presets = ['gem', 'safe', 'degen', 'custom', 'narrative'];
 
 export const Header: React.FC<HeaderProps> = ({
   scanMode,
@@ -117,7 +119,10 @@ export const Header: React.FC<HeaderProps> = ({
                   {p === 'gem' && 'Gem'}
                   {p === 'safe' && '■ Safe'}
                   {p === 'degen' && '▲ Degen'}
-                   {p === 'custom' && 'Custom'}
+                  {p === 'custom' && 'Custom'}
+
+                  {/* TAMBAHAN: Button untuk menampilkan cerita atau analisis mendalam tentang token */}
+                  {p === 'narrative' && '📖 Narrative'}
                 </button>
               ))}
             </div>

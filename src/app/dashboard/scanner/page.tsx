@@ -57,6 +57,7 @@ export default function ScannerPage() {
         stats={stats}
         onExport={exportCSV}
         onRefresh={scanToken}
+        preset={preset} // TAMBAHAN: Kirim preset ke TokenScanner untuk menampilkan filter yang sesuai dengan preset yang dipilih
       />
     </ErrorBoundary>
   );

@@ -19,6 +19,9 @@ import {
   AuthorityType,
 } from '@solana/spl-token';
 
+// TAMBAHAN : IMPORT UNTUK METAPLEX TOKEN METADATA (jika ingin menambahkan metadata saat pembuatan token, tapi untuk sekarang kita skip dulu karena ini hanya untuk testing di Devnet)
+import { Metaplex, keypairIdentity } from '@metaplex-foundation/js';
+
 export default function CreateTokenPage() {
   const [formData, setFormData] = useState({
     name: '',
@@ -45,6 +48,11 @@ export default function CreateTokenPage() {
   const [revokeMint, setRevokeMint] = useState(true);
   const [revokeFreeze, setRevokeFreeze] = useState(true);
   const [makeImmutable, setMakeImmutable] = useState(true);
+
+  // TAMBAHAN: DEVNET STATES
+  const [balance, setBalance] = useState<number | null>(null);
+  const [isRequestingFaucet, setIsRequestingFaucet] = useState(false);
+  const [network, setNetwork] = useState<string>('');
 
   // === DYNAMIC FEE CALCULATOR (sesuai requirement) ===
   const hasCoreFields = 
@@ -90,9 +98,132 @@ export default function CreateTokenPage() {
   const FIELD_FEE = 0.01;
   const PLATFORM_FEE_RECEIVER = 'GFK2JGbzQ8b3jusvNdSwbfdsuQEBP9KawPj6VwcLyyEx';
 
+  // TAMBAHAN: Cek network -> untuk menampilkan pesan yang sesuai dan mengaktifkan fitur devnet jika perlu
+  useEffect(() => {
+    const checkNetwork = async () => {
+      try {
+        // Cara 1: Cek dari RPC endpoint yang digunakan
+        const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL || '';
+        
+        if (rpcUrl.includes('devnet')) {
+          setNetwork('devnet');
+          return;
+        }
+        
+        if (rpcUrl.includes('testnet')) {
+          setNetwork('testnet');
+          return;
+        }
+        
+        if (rpcUrl.includes('mainnet')) {
+          setNetwork('mainnet-beta');
+          return;
+        }
+        
+        // Cara 2: Fallback ke getVersion (kurang akurat untuk Devnet)
+        const version = await connection.getVersion();
+        const versionStr = version['solana-core'] || '';
+        
+        if (versionStr.includes('devnet')) {
+          setNetwork('devnet');
+        } else if (versionStr.includes('testnet')) {
+          setNetwork('testnet');
+        } else {
+          // Cek genesis hash untuk memastikan
+          const genesisHash = await connection.getGenesisHash();
+          if (genesisHash === '4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY') {
+            setNetwork('mainnet-beta');
+          } else if (genesisHash === 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG') {
+            setNetwork('devnet');
+          } else {
+            setNetwork('unknown');
+          }
+        }
+      } catch (err) {
+        console.error('Failed to get network:', err);
+        // Fallback ke environment variable
+        const networkFromEnv = process.env.NEXT_PUBLIC_NETWORK || 'devnet';
+        setNetwork(networkFromEnv === 'devnet' ? 'devnet' : 'mainnet-beta');
+      }
+    };
+    
+    if (connection) checkNetwork();
+  }, [connection]);
+
+  // TAMBAHAN: Ambil balance SOL
+  useEffect(() => {
+    const fetchBalance = async () => {
+      if (connected && publicKey && connection) {
+        try {
+          const bal = await connection.getBalance(publicKey);
+          setBalance(bal / LAMPORTS_PER_SOL);
+        } catch (err) {
+          console.error('Failed to fetch balance:', err);
+        }
+      }
+    };
+    fetchBalance();
+    const interval = setInterval(fetchBalance, 10000);
+    return () => clearInterval(interval);
+  }, [connected, publicKey, connection]);
+
+  // TAMBAHAN: Fungsi request faucet (Devnet only)
+  const requestFaucet = async () => {
+    if (!publicKey) return;
+    setIsRequestingFaucet(true);
+    setStatusMsg('Requesting SOL from faucet...');
+    
+    try {
+      const response = await fetch(
+        `https://api.devnet.solana.com/faucet?address=${publicKey.toString()}`
+      );
+      
+      if (response.ok) {
+        setStatusMsg('✅ Faucet SOL requested! Waiting for confirmation...');
+        setTimeout(async () => {
+          const newBalance = await connection.getBalance(publicKey);
+          setBalance(newBalance / LAMPORTS_PER_SOL);
+          setStatusMsg('');
+        }, 5000);
+      } else {
+        throw new Error('Faucet request failed');
+      }
+    } catch (err) {
+      setStatusMsg('❌ Faucet error. Try: https://faucet.solana.com/');
+    } finally {
+      setIsRequestingFaucet(false);
+    }
+  };
+
+  // TAMBAHAN: Hitung biaya untuk Devnet (hanya rent, tanpa platform fee)
+  const calculateDevnetFee = async (): Promise<number> => {
+    try {
+      const mintLen = getMintLen([]);
+      const mintRent = await connection.getMinimumBalanceForRentExemption(mintLen);
+      const ataRent = await connection.getMinimumBalanceForRentExemption(165);
+      return (mintRent + ataRent) / LAMPORTS_PER_SOL;
+    } catch {
+      return 0.05; // fallback estimate
+    }
+  };
+
+  const [estimatedFee, setEstimatedFee] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (connected && network === 'devnet') {
+      calculateDevnetFee().then(setEstimatedFee);
+    }
+  }, [connected, network]);
+
   const handleCreate = async () => {
     if (!connected || !publicKey) {
       alert('Harap hubungkan wallet!');
+      return;
+    }
+
+    // TAMBAHAN: Cek network sebelum proses pembuatan token
+    if (network !== 'devnet') {
+      alert('⚠️ Please switch your wallet to Devnet!\n\nGo to Phantom Settings → Developer Settings → Testnet Mode → Select Solana Devnet');
       return;
     }
 
@@ -100,6 +231,24 @@ export default function CreateTokenPage() {
     const symbol = formData.symbol.trim();
     const supplyNum = parseFloat(formData.totalSupply);
     const decimalsNum = parseInt(formData.decimals);
+
+    // TAMBAHAN: Validasi decimals (0-9) dan supply untuk menghindari masalah precision di JavaScript
+    if (decimalsNum < 0 || decimalsNum > 9) {
+      alert('Decimals harus antara 0 - 9');
+      return;
+    }
+
+    // TAMBAHAN: Rekomendasi decimals 6 untuk testing
+    if (decimalsNum > 6 && supplyNum > 1000000) {
+      alert('Untuk decimals > 6, gunakan supply lebih kecil (maks 1 juta)');
+      return;
+    }
+
+    // TAMBAHAN: Validasi input yang lebih ketat -> supply maksimal 10 miliar untuk menghindari masalah precision di JavaScript
+    if (supplyNum <= 0 || supplyNum > 10000000000) {
+      alert('Total supply maksimal 10,000,000,000 (10 miliar)');
+      return;
+    }
 
     if (!name || !symbol || isNaN(supplyNum) || isNaN(decimalsNum)) {
       alert('Isi data dengan benar');
@@ -115,9 +264,13 @@ export default function CreateTokenPage() {
       const mintRentLamports = await connection.getMinimumBalanceForRentExemption(mintLen);
       const ataRentLamports = await connection.getMinimumBalanceForRentExemption(165);
       const platformFeeLamports = Math.floor(totalFee * LAMPORTS_PER_SOL);
-      const txFeeBuffer = 20000;
+      // const txFeeBuffer = 20000;
+      // const totalRequired = mintRentLamports + ataRentLamports + platformFeeLamports + txFeeBuffer;
 
-      const totalRequired = mintRentLamports + ataRentLamports + platformFeeLamports + txFeeBuffer;
+      // TAMBAHAN: Karena ini Devnet, kita hanya perlu memastikan user punya cukup SOL untuk rent, tanpa platform fee. Jadi kita hitung ulang total required untuk Devnet.
+      const txFeeBuffer = 0; // Devnet biasanya gratis, jadi kita bisa skip buffer fee
+      const totalRequired = mintRentLamports + ataRentLamports + txFeeBuffer; // ← HAPUS + platformFeeLamports
+      
       const userBalance = await connection.getBalance(publicKey);
 
       if (userBalance < totalRequired) {
@@ -129,10 +282,17 @@ export default function CreateTokenPage() {
       // FIX BigInt: hindari precision loss untuk supply besar
       const rawSupply = BigInt(Math.round(supplyNum)) * (10n ** BigInt(decimalsNum));
 
+      // TAMBAHAN: Hitung raw supply dan CEK APAKAH TERLALU BESAR
+      if (rawSupply > 2n ** 64n) { // Maksimum 64-bit integer
+        alert('Total supply terlalu besar! Gunakan decimals lebih kecil atau supply lebih kecil.');
+        return;
+      }
+
       const userATA = await getAssociatedTokenAddress(
         mintKeypair.publicKey,
         publicKey,
-        false,
+        // false,
+        true, // allow owner off curve untuk testing, karena beberapa wallet adapter mungkin menggunakan PDA untuk ATA
         TOKEN_PROGRAM_ID,
         ASSOCIATED_TOKEN_PROGRAM_ID
       );
@@ -214,16 +374,16 @@ export default function CreateTokenPage() {
         );
       }
 
-      // 7. Platform fee
-      if (platformFeeLamports > 0) {
-        transaction.add(
-          SystemProgram.transfer({
-            fromPubkey: publicKey,
-            toPubkey: new PublicKey(PLATFORM_FEE_RECEIVER),
-            lamports: platformFeeLamports,
-          })
-        );
-      }
+      // 7. Platform fee -> HAPUS UNTUK DEVNET, karena ini hanya untuk simulasi dan testing. Di mainnet, kita tetap transfer fee ke platform.
+      // if (platformFeeLamports > 0) {
+      //   transaction.add(
+      //     SystemProgram.transfer({
+      //       fromPubkey: publicKey,
+      //       toPubkey: new PublicKey(PLATFORM_FEE_RECEIVER),
+      //       lamports: platformFeeLamports,
+      //     })
+      //   );
+      // }
 
       setStatusMsg('Menunggu tanda tangan wallet...');
 
@@ -287,6 +447,66 @@ export default function CreateTokenPage() {
           </p>
         </div>
 
+        {/* TAMBAHAN: Devnet Banner & Faucet */}
+        {network === 'devnet' && (
+          <div style={{ 
+            background: '#1a2a1a', 
+            border: '1px solid #22c55e44', 
+            borderRadius: 12, 
+            padding: '12px 20px', 
+            marginBottom: 24,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 12
+          }}>
+            <div>
+              <span style={{ color: '#22c55e', fontWeight: 'bold', fontSize: 14 }}>🧪 DEVNET MODE</span>
+              <span style={{ color: '#888', fontSize: 12, marginLeft: 12 }}>
+                Balance: {balance !== null ? `${balance.toFixed(4)} SOL` : 'Loading...'}
+              </span>
+              {estimatedFee && (
+                <span style={{ color: '#666', fontSize: 11, marginLeft: 12 }}>
+                  Estimated fee: ~{estimatedFee !== null ? estimatedFee.toFixed(4) : '0.0035'} SOL
+                </span>
+              )}
+            </div>
+            <button
+              onClick={requestFaucet}
+              disabled={isRequestingFaucet || !connected}
+              style={{
+                background: !connected ? '#444' : '#22c55e',
+                border: 'none',
+                color: !connected ? '#888' : '#1a1a1a',
+                padding: '8px 20px',
+                borderRadius: 8,
+                fontWeight: 'bold',
+                fontSize: 13,
+                cursor: !connected ? 'not-allowed' : 'pointer',
+              }}
+            >
+              💧 Request Faucet SOL
+            </button>
+          </div>
+        )}
+
+        {/* TAMBAHAN: Network Warning */}
+        {network === 'mainnet-beta' && (
+          <div style={{ 
+            background: '#3a1a1a', 
+            border: '1px solid #d9534f', 
+            borderRadius: 12, 
+            padding: '12px 20px', 
+            marginBottom: 24 
+          }}>
+            <span style={{ color: '#d9534f', fontWeight: 'bold' }}>⚠️ Mainnet Detected!</span>
+            <span style={{ color: '#aaa', fontSize: 12, marginLeft: 12 }}>
+              Switch your wallet to Devnet for free token creation.
+            </span>
+          </div>
+        )}
+
         {isCreated ? (
           <div style={{ background: '#1a2a1a', border: '1px solid #5cb85c44', borderRadius: 12, padding: 32 }}>
               <div style={{ textAlign: 'center', marginBottom: 24 }}>
@@ -325,11 +545,21 @@ export default function CreateTokenPage() {
             </div>
 
             <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-              <a href={`https://solscan.io/token/${createdTokenAddress}`} target="_blank" rel="noopener noreferrer"
+              {/* <a href={`https://solscan.io/token/${createdTokenAddress}`} target="_blank" rel="noopener noreferrer"
                 style={{ flex: 1, background: '#1a1a2a', border: '1px solid #444', color: '#5b9bd5', padding: '10px', borderRadius: 8, textAlign: 'center', textDecoration: 'none', fontSize: 13 }}>
                 🔍 Lihat di Solscan
               </a>
               <a href={`https://explorer.solana.com/tx/${createdSignature}`} target="_blank" rel="noopener noreferrer"
+                style={{ flex: 1, background: '#1a1a2a', border: '1px solid #444', color: '#888', padding: '10px', borderRadius: 8, textAlign: 'center', textDecoration: 'none', fontSize: 13 }}>
+                📝 Lihat Transaksi
+              </a> */}
+
+              {/* TAMBAHAN: Link explorer untuk DEVNET */}
+              <a href={`https://explorer.solana.com/address/${createdTokenAddress}?cluster=devnet`} target="_blank" rel="noopener noreferrer"
+                style={{ flex: 1, background: '#1a1a2a', border: '1px solid #444', color: '#5b9bd5', padding: '10px', borderRadius: 8, textAlign: 'center', textDecoration: 'none', fontSize: 13 }}>
+                🔍 Lihat di Solana Explorer (Devnet)
+              </a>
+              <a href={`https://explorer.solana.com/tx/${createdSignature}?cluster=devnet`} target="_blank" rel="noopener noreferrer"
                 style={{ flex: 1, background: '#1a1a2a', border: '1px solid #444', color: '#888', padding: '10px', borderRadius: 8, textAlign: 'center', textDecoration: 'none', fontSize: 13 }}>
                 📝 Lihat Transaksi
               </a>
@@ -416,6 +646,7 @@ export default function CreateTokenPage() {
                     style={{ width: '100%', background: '#111', border: '1px solid #444', color: '#e8e8e8', padding: '10px 14px', borderRadius: 8, fontSize: 14, outline: 'none' }}
                   />
                 </div>
+                
               </div>
 
               <div className="space-y-2">
@@ -510,13 +741,24 @@ export default function CreateTokenPage() {
               </div>
 
               <div className="pt-4">
-                <div className="flex items-center justify-between mb-4 px-1">
+                {/* UNTUK MAINNET */}
+                {/* <div className="flex items-center justify-between mb-4 px-1">
                   <span className="text-sm font-bold text-gray-400">Biaya Pembuatan</span>
                   <span className="bg-[#d2992222] text-[#d29922] border border-[#d2992244] px-3 py-1 rounded-full text-xs font-black">
                     {creationFee} SOL
                   </span>
+                </div> */}
+
+                {/* TAMBAHAN: BIAYA PEMBUATAN UNTUK DEVNET */}
+                <div className="flex items-center justify-between mb-4 px-1">
+                  <span className="text-sm font-bold text-gray-400">Biaya Pembuatan (Devnet)</span>
+                  <span className="bg-[#22c55e22] text-[#22c55e] border border-[#22c55e44] px-3 py-1 rounded-full text-xs font-black">
+                    ~{estimatedFee !== null ? estimatedFee.toFixed(4) : '0.0035'} SOL
+                  </span>
                 </div>
-              <button 
+                
+                {/* untuk mainnet */}
+              {/* <button 
                 onClick={handleCreate}
                 disabled={!formData.name || !formData.symbol || !formData.totalSupply || !connected || isLoading}
                 style={{ 
@@ -538,10 +780,42 @@ export default function CreateTokenPage() {
                     ? 'Create Token on Solana' 
                     : 'Connect Wallet to Create'
                 }
+              </button> */}
+
+              {/* TAMBAHAN: UNTUK DEVNET */}
+              <button 
+                onClick={handleCreate}
+                disabled={!formData.name || !formData.symbol || !formData.totalSupply || !connected || isLoading}
+                style={{ 
+                  width: '100%', 
+                  padding: '16px', 
+                  background: (!formData.name || !formData.symbol || !formData.totalSupply || !connected || isLoading) ? '#222' : '#22c55e',  // ← GANTI ke HIJAU
+                  color: (!formData.name || !formData.symbol || !formData.totalSupply || !connected || isLoading) ? '#555' : '#1a1a1a',
+                  borderRadius: 12, 
+                  fontWeight: 'bold', 
+                  fontSize: 16,
+                  cursor: (!formData.name || !formData.symbol || !formData.totalSupply || !connected || isLoading) ? 'not-allowed' : 'pointer',
+                  border: 'none',
+                  transition: 'all 0.2s',
+                }}
+              >
+                {isLoading 
+                  ? `⟳ ${statusMsg || 'Memproses...'}` 
+                  : connected 
+                    ? '✨ Create Token on Devnet (FREE)'  // ← GANTI TEKS INI
+                    : 'Connect Wallet to Create'
+                }
               </button>
-                <p className="text-[10px] text-center text-gray-600 mt-4 font-medium">
+
+              {/* untuk mainnet */}
+                {/* <p className="text-[10px] text-center text-gray-600 mt-4 font-medium">
                   Token akan dibuat di Solana Mainnet. Pastikan data sudah benar sebelum konfirmasi.
-                </p>
+                </p> */}
+
+              {/* TAMBAHAN: UNTUK DEVNET */}
+              <p className="text-[10px] text-center text-gray-600 mt-4 font-medium">
+                Token akan dibuat di Solana Devnet (GRATIS). Hanya perlu ~0.0035 SOL untuk rent account.
+              </p>
               </div>
             </div>
 

@@ -20,6 +20,33 @@ export const PRESETS: Record<string, any> = {
 // Slippage options
 export const SLIPPAGE_OPTIONS = [0.5, 1, 2, 3, 5];
 
+// Burn liquidity constants
+export const BURN_LIQUIDITY_CONFIG = {
+  // Supported DEXes for burning
+  SUPPORTED_DEXES: [
+    'Raydium',
+    'Meteora', 
+    'Orca',
+    'Jupiter'
+  ],
+  
+  // Warning messages
+  BURN_WARNINGS: [
+    'THIS ACTION IS IRREVERSIBLE',
+    'You will lose all LP tokens permanently',
+    'Future fees cannot be claimed',
+    'Token supply will become more scarce'
+  ],
+  
+  // Minimum burn amount (optional)
+  MIN_BURN_AMOUNT: 0.000001,
+  
+  // Explorer URLs
+  EXPLORER_BASE_URL: process.env.NEXT_PUBLIC_NETWORK === 'devnet' 
+    ? 'https://explorer.solana.com/tx/'
+    : 'https://solscan.io/tx/'
+};
+
 // Color constants
 export const COLORS = {
   primary: '#9945ff',

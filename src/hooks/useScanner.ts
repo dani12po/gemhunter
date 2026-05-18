@@ -16,6 +16,70 @@ export function useScanner() {
   const snapshotRef = useRef<Record<string, { liquidity: number; volume24h: number; harga: number }>>({});
   const tokensRef = useRef<TokenData[]>([]);
 
+  // --------------------------------------------------------------------------
+  // TAMBAHAN: State untuk jenis narrative yang ingin ditampilkan (misalnya bisa berdasarkan kategori token, atau token tertentu yang sedang tren)
+  const detectNarrative = (token: TokenData): string => {
+    const name = token.nama?.toLowerCase() || '';
+    const symbol = token.simbol?.toLowerCase() || '';
+    
+    // AI Agent narrative
+    if (name.includes('ai') || name.includes('agent') || symbol.includes('ai')) {
+      return '🤖 AI Agent';
+    }
+    
+    // Meme narrative
+    if (name.includes('cat') || name.includes('dog') || name.includes('pepe') || 
+        name.includes('frog') || name.includes('meme') || name.includes('shib') ||
+        symbol.includes('cat') || symbol.includes('dog')) {
+      return '🐱 Meme Coin';
+    }
+    
+    // DePIN narrative
+    if (name.includes('depin') || name.includes('network') || name.includes('node') ||
+        name.includes('iot') || name.includes('sensor')) {
+      return '🏗️ DePIN';
+    }
+    
+    // RWA narrative
+    if (name.includes('real') || name.includes('asset') || symbol.includes('rwa')) {
+      return '🏦 RWA';
+    }
+    
+    // Gaming narrative
+    if (name.includes('game') || name.includes('play') || name.includes('gaming') ||
+        symbol.includes('game') || name.includes('p2e')) {
+      return '🎮 Gaming';
+    }
+    
+    // DeFi narrative
+    if (name.includes('defi') || name.includes('swap') || name.includes('yield') ||
+        name.includes('lending') || name.includes('dao')) {
+      return '💱 DeFi';
+    }
+    
+    // Social narrative
+    if (name.includes('social') || name.includes('friend') || symbol.includes('social') ||
+        name.includes('community')) {
+      return '👥 Social';
+    }
+    
+    // Layer 2 / Infrastructure
+    if (name.includes('layer') || name.includes('l2') || name.includes('rollup') ||
+        name.includes('infra')) {
+      return '⚡ Layer 2';
+    }
+    
+    // Launchpad / Presale
+    if (name.includes('launch') || name.includes('presale') || name.includes('seed') ||
+        name.includes('launchpad')) {
+      return '🚀 Launchpad';
+    }
+    
+    return '🆕 New Token';
+  };
+
+// --------------------------------------------------------------------
+
   // Load persisted state on mount
   useEffect(() => {
     if (typeof window !== 'undefined') {

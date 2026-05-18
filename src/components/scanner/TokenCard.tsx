@@ -20,6 +20,13 @@ export const TokenCard: React.FC<TokenCardProps> = ({ token, onSwap }) => {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // TAMBAHAN: Fungsi untuk membuka pump.fun dengan token address
+  const handleOpenPumpFun = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const url = `https://pump.fun/coin/${token.address}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   return (
     <div style={{
       background:'#242424',
@@ -51,6 +58,38 @@ export const TokenCard: React.FC<TokenCardProps> = ({ token, onSwap }) => {
               color:'#f5a623', fontSize:9, padding:'1px 5px', fontWeight:'bold',
             }}>BOOSTED</span>
           )}
+
+          {/*---------------------------------------------------  */}
+          {/* TAMBAHAN: Badge untuk menandai token yang baru listing (umur < 6 jam) */}
+          {(() => {
+            const name = token.nama?.toLowerCase() || '';
+            const symbol = token.simbol?.toLowerCase() || '';
+            let narrative = '';
+            let color = '';
+            
+            if (name.includes('ai') || name.includes('agent')) { narrative = '🤖 AI'; color = '#9b59b6'; }
+            else if (name.includes('cat') || name.includes('dog') || name.includes('pepe')) { narrative = '🐱 Meme'; color = '#f39c12'; }
+            else if (name.includes('depin') || name.includes('network')) { narrative = '🏗️ DePIN'; color = '#3498db'; }
+            else if (name.includes('game') || name.includes('play')) { narrative = '🎮 Game'; color = '#e74c3c'; }
+            else if (name.includes('defi')) { narrative = '💱 DeFi'; color = '#1abc9c'; }
+            else { narrative = '🆕 New'; color = '#888'; }
+            
+            return (
+              <span style={{
+                background: `${color}22`,
+                border: `1px solid ${color}`,
+                borderRadius: 12,
+                color: color,
+                padding: '2px 8px',
+                fontSize: 9,
+                fontWeight: 'bold',
+                marginLeft: 8,
+              }}>
+                {narrative}
+              </span>
+            );
+          })()}
+          {/* ------------------------------------------------------- */}
         </div>
         <div style={{ display:'flex', alignItems:'center', gap:6 }}>
           <span style={{
@@ -92,15 +131,46 @@ export const TokenCard: React.FC<TokenCardProps> = ({ token, onSwap }) => {
 
       {/* Address + links */}
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'5px 10px', background:'#1e1e1e' }}>
-        <button
-          onClick={handleCopy}
-          style={{
-            background:'none', border:'none', color:'#666', fontFamily:'monospace',
-            fontSize:10, cursor:'pointer', padding:0,
-          }}
-        >
-          {copied ? '✓ COPIED' : `${token.address.slice(0,8)}...${token.address.slice(-6)}`}
-        </button>
+        <div style={{ display:'flex', alignItems:'center', gap: 8 }}>
+          <button
+            onClick={handleCopy}
+            style={{
+              background:'none', border:'none', color:'#666', fontFamily:'monospace',
+              fontSize:10, cursor:'pointer', padding:0,
+            }}
+          >
+            {copied ? '✓ COPIED' : `${token.address.slice(0,8)}...${token.address.slice(-6)}`}
+          </button>
+
+          {/* TAMBAHAN: Button untuk membuka pump.fun */}
+          <button
+            onClick={handleOpenPumpFun}
+            style={{
+              background: '#2a1a0a',
+              border: '1px solid #f5a623',
+              borderRadius: 4,
+              color: '#f5a623',
+              padding: '2px 8px',
+              fontSize: 10,
+              fontWeight: 'bold',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 4,
+              transition: 'all 0.2s',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#f5a623';
+              e.currentTarget.style.color = '#1a1a1a';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = '#2a1a0a';
+              e.currentTarget.style.color = '#f5a623';
+            }}
+          >
+            🚀 Pump
+          </button>
+        </div>
         <div style={{ display:'flex', gap:6 }}>
           {token.website && <a href={token.website} target="_blank" rel="noopener noreferrer" style={{ color:'#888', fontSize:10 }}>WEB</a>}
           {token.twitter && <a href={token.twitter} target="_blank" rel="noopener noreferrer" style={{ color:'#888', fontSize:10 }}>TWT</a>}
