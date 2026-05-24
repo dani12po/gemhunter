@@ -6,8 +6,8 @@ import { analyzeTokenRisk } from '../lib/scanner/riskAnalyzer';
 import { formatAngka, formatHarga } from '../lib/format';
 import { PRESETS, API_LATEST_PROFILES, API_BOOSTED_LATEST, API_TOKEN_PAIRS, API_DEXSCREENER_SEARCH } from '../lib/constants';
 
-// Solana address regex
-const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+// Solana address regex — support standard (32-44) dan pump.fun format (44+pump suffix)
+const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,48}(pump)?$/i;
 
 export function useScanner() {
   const { connection } = useConnection();
@@ -167,31 +167,68 @@ export function useScanner() {
 
   // Fetch token by CA address directly from Dexscreener
   const fetchTokenByCA = useCallback(async (ca: string) => {
+    // Normalize CA — strip whitespace, handle pump.fun format
+    const normalized = ca.trim();
+    // Pump.fun addresses end with "pump" — the actual mint is the base58 part
+    // Try both the full address and without "pump" suffix
+    const addresses = [normalized];
+    if (normalized.toLowerCase().endsWith('pump') && normalized.length > 44) {
+      addresses.push(normalized.slice(0, -4)); // try without "pump"
+    }
+
     setCaLoading(true);
     setCaToken(null);
-    try {
-      const token = await fetchDataToken({ tokenAddress: ca });
-      setCaToken(token);
-    } catch {
-      setCaToken(null);
-    } finally {
-      setCaLoading(false);
+
+    for (const addr of addresses) {
+      try {
+        const token = await fetchDataToken({ tokenAddress: addr });
+        if (token) {
+          setCaToken(token);
+          setCaLoading(false);
+          return;
+        }
+      } catch { /* try next */ }
     }
+
+    // Fallback: try Dexscreener search API
+    try {
+      const data = await fetchJSON(API_DEXSCREENER_SEARCH + encodeURIComponent(normalized));
+      const pairs = (data.pairs || []).filter((p: any) => p.chainId === 'solana');
+      if (pairs.length > 0) {
+        const pair = pairs[0];
+        const addr = pair.baseToken?.address || normalized;
+        const token = await fetchDataToken({ tokenAddress: addr });
+        if (token) {
+          setCaToken(token);
+          setCaLoading(false);
+          return;
+        }
+      }
+    } catch { /* ignore */ }
+
+    setCaToken(null);
+    setCaLoading(false);
   }, []);
 
   // Auto-detect CA in search query and fetch it
   useEffect(() => {
     clearTimeout(caTimerRef.current);
     const q = searchQuery.trim();
+    if (!q) { setCaToken(null); setCaLoading(false); return; }
+
     if (SOLANA_ADDRESS_RE.test(q)) {
-      // It's a CA — check if already in list
-      const existing = tokensRef.current.find(t => t.address === q);
+      // Check if already in list (with or without pump suffix)
+      const qLower = q.toLowerCase();
+      const existing = tokensRef.current.find(t =>
+        t.address.toLowerCase() === qLower ||
+        t.address.toLowerCase() === qLower.replace(/pump$/i, '')
+      );
       if (existing) {
         setCaToken(existing);
         setCaLoading(false);
       } else {
         setCaLoading(true);
-        caTimerRef.current = setTimeout(() => fetchTokenByCA(q), 500);
+        caTimerRef.current = setTimeout(() => fetchTokenByCA(q), 600);
       }
     } else {
       setCaToken(null);
@@ -312,20 +349,29 @@ export function useScanner() {
   }, [scanToken]);
 
   const applyFilter = useCallback((tokenList: TokenData[]) => {
-    const cari = searchQuery.toLowerCase().trim();
+    const cari = searchQuery.trim();
+    const cariLower = cari.toLowerCase();
     const isCA = SOLANA_ADDRESS_RE.test(cari);
 
-    // Jika CA search — tampilkan caToken saja (atau token dari list jika ada)
+    // CA search — bypass semua filter, tampilkan token dari CA langsung
     if (isCA) {
-      const fromList = tokenList.filter(t => t.address.toLowerCase() === cari);
+      // Cek di list yang sudah ada dulu (case-insensitive)
+      const fromList = tokenList.filter(t =>
+        t.address.toLowerCase() === cariLower ||
+        t.address.toLowerCase().startsWith(cariLower.replace(/pump$/i, ''))
+      );
       if (fromList.length > 0) return fromList;
+      // Tampilkan caToken yang di-fetch
       if (caToken) return [caToken];
       return [];
     }
 
+    // Normal search — filter by name/symbol/address
     return tokenList.filter((t) => {
-      if (cari && !t.nama.toLowerCase().includes(cari) && !t.simbol.toLowerCase().includes(cari) && !t.address.toLowerCase().includes(cari)) return false;
-      
+      if (cariLower && !t.nama.toLowerCase().includes(cariLower) &&
+          !t.simbol.toLowerCase().includes(cariLower) &&
+          !t.address.toLowerCase().includes(cariLower)) return false;
+
       // Risk Filter
       if (filter.riskLevel && filter.riskLevel !== 'ALL') {
         if (!t.risk || t.risk.score !== filter.riskLevel) return false;
