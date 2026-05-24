@@ -385,7 +385,7 @@ export default function LiquidityPage() {
 
   // Sync network state with wallet's actual network
   const [network, setNetwork] = useState<NetworkMode>(
-    (process.env.NEXT_PUBLIC_NETWORK as NetworkMode) === 'mainnet-beta' ? 'mainnet' : 'devnet'
+    process.env.NEXT_PUBLIC_NETWORK === 'mainnet-beta' ? 'mainnet' : 'devnet'
   );
 
   // Auto-update when wallet network changes
