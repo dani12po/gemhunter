@@ -4,7 +4,10 @@ import type { TokenData, FilterData } from '../lib/types';
 import { hitungSkor, hitungGemScore, deteksiRedFlag } from '../lib/scoring';
 import { analyzeTokenRisk } from '../lib/scanner/riskAnalyzer';
 import { formatAngka, formatHarga } from '../lib/format';
-import { PRESETS, API_LATEST_PROFILES, API_BOOSTED_LATEST, API_TOKEN_PAIRS } from '../lib/constants';
+import { PRESETS, API_LATEST_PROFILES, API_BOOSTED_LATEST, API_TOKEN_PAIRS, API_DEXSCREENER_SEARCH } from '../lib/constants';
+
+// Solana address regex
+const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 export function useScanner() {
   const { connection } = useConnection();
@@ -18,6 +21,10 @@ export function useScanner() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const snapshotRef = useRef<Record<string, { liquidity: number; volume24h: number; harga: number }>>({});
   const tokensRef = useRef<TokenData[]>([]);
+  // CA search state — token yang di-fetch langsung dari CA input
+  const [caToken, setCaToken] = useState<TokenData | null>(null);
+  const [caLoading, setCaLoading] = useState(false);
+  const caTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   // Deteksi narrative berdasarkan nama/simbol token
   const detectNarrative = (token: TokenData): string => {
@@ -158,44 +165,86 @@ export function useScanner() {
     }
   };
 
+  // Fetch token by CA address directly from Dexscreener
+  const fetchTokenByCA = useCallback(async (ca: string) => {
+    setCaLoading(true);
+    setCaToken(null);
+    try {
+      const token = await fetchDataToken({ tokenAddress: ca });
+      setCaToken(token);
+    } catch {
+      setCaToken(null);
+    } finally {
+      setCaLoading(false);
+    }
+  }, []);
+
+  // Auto-detect CA in search query and fetch it
+  useEffect(() => {
+    clearTimeout(caTimerRef.current);
+    const q = searchQuery.trim();
+    if (SOLANA_ADDRESS_RE.test(q)) {
+      // It's a CA — check if already in list
+      const existing = tokensRef.current.find(t => t.address === q);
+      if (existing) {
+        setCaToken(existing);
+        setCaLoading(false);
+      } else {
+        setCaLoading(true);
+        caTimerRef.current = setTimeout(() => fetchTokenByCA(q), 500);
+      }
+    } else {
+      setCaToken(null);
+      setCaLoading(false);
+    }
+  }, [searchQuery, fetchTokenByCA]);
+
   const scanToken = useCallback(async (isBackground = false) => {
     if (!isBackground) setLoading(true);
     setError(null);
 
     try {
-      const [profilRes, boostedRes] = await Promise.allSettled([
+      // Fetch latest profiles, boosted, dan pump.fun graduated secara paralel
+      const [profilRes, boostedRes, pumpRes] = await Promise.allSettled([
         scanMode === 'latest' || scanMode === 'both' ? fetchJSON(API_LATEST_PROFILES) : Promise.resolve([]),
         scanMode === 'boosted' || scanMode === 'both' ? fetchJSON(API_BOOSTED_LATEST) : Promise.resolve([]),
+        // Pump.fun graduated: cari token Solana terbaru dengan volume tinggi
+        fetchJSON('https://api.dexscreener.com/token-profiles/latest/v1').catch(() => []),
       ]);
 
       const profilMap = new Map<string, TokenData>();
 
-      const latestArr = (profilRes.status === 'fulfilled' ? profilRes.value : []).filter((p: { chainId: string }) => p.chainId === 'solana');
-      const boostedArr = (boostedRes.status === 'fulfilled' ? boostedRes.value : []).filter((p: { chainId: string }) => p.chainId === 'solana');
+      const latestArr = (profilRes.status === 'fulfilled' ? profilRes.value : [])
+        .filter((p: { chainId: string }) => p.chainId === 'solana');
+      const boostedArr = (boostedRes.status === 'fulfilled' ? boostedRes.value : [])
+        .filter((p: { chainId: string }) => p.chainId === 'solana');
+      // Pump.fun graduated — ambil yang belum ada di latestArr
+      const pumpArr = (pumpRes.status === 'fulfilled' ? pumpRes.value : [])
+        .filter((p: { chainId: string; tokenAddress: string }) =>
+          p.chainId === 'solana' &&
+          !latestArr.find((l: { tokenAddress: string }) => l.tokenAddress === p.tokenAddress)
+        );
 
-      const latestResults = await Promise.allSettled(
-        latestArr.map((p: any) => fetchDataToken(p))
-      );
+      // Fetch semua token secara paralel dengan batching
+      const allProfiles = [...latestArr, ...pumpArr];
+      const BATCH = 10; // fetch 10 sekaligus untuk hindari rate limit
 
-      latestResults.forEach((r, i) => {
-        if (r.status === 'fulfilled' && r.value) {
-          const token = r.value;
-          token.isBoosted = false;
-          profilMap.set(latestArr[i].tokenAddress, token);
+      const fetchBatch = async (arr: any[], isBoosted: boolean) => {
+        for (let i = 0; i < arr.length; i += BATCH) {
+          const batch = arr.slice(i, i + BATCH);
+          const results = await Promise.allSettled(batch.map((p: any) => fetchDataToken(p)));
+          results.forEach((r, j) => {
+            if (r.status === 'fulfilled' && r.value) {
+              const token = r.value;
+              token.isBoosted = isBoosted;
+              profilMap.set(batch[j].tokenAddress, token);
+            }
+          });
         }
-      });
+      };
 
-      const boostedResults = await Promise.allSettled(
-        boostedArr.map((p: any) => fetchDataToken(p))
-      );
-
-      boostedResults.forEach((r, i) => {
-        if (r.status === 'fulfilled' && r.value) {
-          const token = r.value;
-          token.isBoosted = true;
-          profilMap.set(boostedArr[i].tokenAddress, token);
-        }
-      });
+      await fetchBatch(allProfiles, false);
+      await fetchBatch(boostedArr, true);
 
       const tokensList = Array.from(profilMap.values());
 
@@ -228,8 +277,13 @@ export function useScanner() {
         });
 
         const merged = Array.from(existingMap.values())
-          .sort((a, b) => a.ageHours - b.ageHours)
-          .slice(0, 200);
+          // Sort: boosted dulu, lalu by score desc, lalu by age asc
+          .sort((a, b) => {
+            if (a.isBoosted !== b.isBoosted) return a.isBoosted ? -1 : 1;
+            if (b.skor !== a.skor) return b.skor - a.skor;
+            return a.ageHours - b.ageHours;
+          })
+          .slice(0, 300); // simpan lebih banyak
 
         tokensRef.current = merged;
         return merged;
@@ -249,8 +303,8 @@ export function useScanner() {
 
   useEffect(() => {
     scanToken();
-    // Update every 30 seconds to avoid rate limits and allow new tokens to appear
-    intervalRef.current = setInterval(() => scanToken(true), 30000);
+    // Scan setiap 15 detik — lebih cepat untuk catch pump.fun graduates
+    intervalRef.current = setInterval(() => scanToken(true), 15000);
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -259,6 +313,16 @@ export function useScanner() {
 
   const applyFilter = useCallback((tokenList: TokenData[]) => {
     const cari = searchQuery.toLowerCase().trim();
+    const isCA = SOLANA_ADDRESS_RE.test(cari);
+
+    // Jika CA search — tampilkan caToken saja (atau token dari list jika ada)
+    if (isCA) {
+      const fromList = tokenList.filter(t => t.address.toLowerCase() === cari);
+      if (fromList.length > 0) return fromList;
+      if (caToken) return [caToken];
+      return [];
+    }
+
     return tokenList.filter((t) => {
       if (cari && !t.nama.toLowerCase().includes(cari) && !t.simbol.toLowerCase().includes(cari) && !t.address.toLowerCase().includes(cari)) return false;
       
@@ -268,15 +332,15 @@ export function useScanner() {
       }
 
       if (t.liquidity < filter.liquidityMin) return false;
-      if (t.liquidity > filter.liqMax) return false;
+      if (filter.liqMax > 0 && t.liquidity > filter.liqMax) return false;
       if (t.volume24h < filter.volumeMin) return false;
       if (t.ageHours > filter.ageMaxJam) return false;
       if (t.priceChange1h < filter.delta1jMin) return false;
       if (t.txCount24h < filter.txnMin) return false;
-      if (t.marketCap > filter.mcapMax && t.marketCap > 0) return false;
+      if (filter.mcapMax > 0 && t.marketCap > filter.mcapMax && t.marketCap > 0) return false;
       return true;
     });
-  }, [searchQuery, filter]);
+  }, [searchQuery, filter, caToken]);
 
   const filteredTokens = applyFilter(tokens);
 
@@ -340,6 +404,8 @@ export function useScanner() {
     setScanMode,
     scanToken,
     stats,
-    exportCSV
+    exportCSV,
+    caLoading,
+    caToken,
   };
 }

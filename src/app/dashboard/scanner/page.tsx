@@ -23,6 +23,7 @@ export default function ScannerPage() {
     stats,
     exportCSV,
     scanToken,
+    caLoading,
   } = useScanner();
 
   // undefined = modal closed
@@ -58,6 +59,7 @@ export default function ScannerPage() {
         onExport={exportCSV}
         onRefresh={scanToken}
         preset={preset}
+        caLoading={caLoading}
       />
     </ErrorBoundary>
   );

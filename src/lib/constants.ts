@@ -8,6 +8,10 @@ export const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 export const API_LATEST_PROFILES = 'https://api.dexscreener.com/token-profiles/latest/v1';
 export const API_BOOSTED_LATEST = 'https://api.dexscreener.com/token-boosts/latest/v1';
 export const API_TOKEN_PAIRS = 'https://api.dexscreener.com/latest/dex/tokens/';
+// Pump.fun graduated tokens — token yang baru lulus dari bonding curve
+export const API_PUMPFUN_GRADUATED = 'https://api.dexscreener.com/token-profiles/latest/v1';
+// Dexscreener search by CA
+export const API_DEXSCREENER_SEARCH = 'https://api.dexscreener.com/latest/dex/search?q=';
 
 // Presets
 export const PRESETS: Record<string, any> = {

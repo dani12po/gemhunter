@@ -21,6 +21,7 @@ interface TokenScannerProps {
   onExport: () => void;
   onRefresh: () => void;
   preset?: string;
+  caLoading?: boolean;
 }
 
 const labelMap: Partial<Record<keyof FilterData, string>> = {
@@ -77,7 +78,7 @@ const HEADER_HEIGHT = 96;
 export const TokenScanner: React.FC<TokenScannerProps> = ({
   tokens, loading, error, searchQuery, onSearchChange,
   filter, onFilterChange, onSwapOpen, swapToken, onSwapClose,
-  stats, onExport, onRefresh, preset,
+  stats, onExport, onRefresh, preset, caLoading,
 }) => {
   const [currentPage, setCurrentPage] = React.useState(1);
   const [selectedNarrative, setSelectedNarrative] = React.useState<string>('all');
@@ -142,21 +143,29 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
           <div style={{ position: 'relative', flex: 1 }}>
             <input
               type="text"
-              placeholder="Cari nama, simbol, atau address..."
+              placeholder="Cari nama, simbol, address, atau paste CA..."
               value={searchQuery}
               onChange={e => onSearchChange(e.target.value)}
               style={{
                 width: '100%',
                 background: '#1e1e1e',
-                border: '1px solid #444',
+                border: `1px solid ${caLoading ? '#f5a623' : '#444'}`,
                 color: '#e8e8e8',
                 padding: '7px 10px 7px 34px',
                 fontSize: 12,
                 outline: 'none',
                 fontFamily: 'Trebuchet MS, Verdana, sans-serif',
+                transition: 'border-color 0.2s',
               }}
             />
-            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#555', fontSize: 12 }}>S</span>
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: caLoading ? '#f5a623' : '#555', fontSize: 12 }}>
+              {caLoading ? '...' : 'S'}
+            </span>
+            {caLoading && (
+              <span style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: '#f5a623', fontSize: 10 }}>
+                Fetching CA...
+              </span>
+            )}
           </div>
           <button
             onClick={onExport}
