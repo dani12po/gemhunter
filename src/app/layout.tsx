@@ -10,11 +10,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="id">
       <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet" />
       </head>
-      <body style={{ background: '#1a1a1a' }}>
+      <body style={{ background: '#1a1a1a', overflowX: 'hidden' }}>
         <SolanaProvider>
           {children}
         </SolanaProvider>

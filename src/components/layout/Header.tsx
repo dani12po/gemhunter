@@ -68,7 +68,7 @@ export const Header: React.FC<HeaderProps> = ({
             }}>BETA</span>
           </Link>
 
-          <nav style={{ display:'flex', gap:0 }}>
+          <nav className="header-nav">
             {navItems.map(item => (
               <Link key={item.href} href={item.href} style={{
                 display:'block', padding:'14px 16px',
@@ -77,7 +77,7 @@ export const Header: React.FC<HeaderProps> = ({
                 borderBottom: isActive(item.href, item.exact) ? '2px solid #f5a623' : '2px solid transparent',
                 color: isActive(item.href, item.exact) ? '#f5a623' : '#aaa',
                 fontSize: 12, fontWeight:'bold', textDecoration:'none',
-                transition: 'color 0.1s',
+                transition: 'color 0.1s', whiteSpace: 'nowrap',
               }}>
                 {item.label}
               </Link>
@@ -102,10 +102,7 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Controls bar (scanner only) */}
         {(pathname === '/' || pathname === '/dashboard/scanner') && (
-          <div style={{
-            display:'flex', alignItems:'center', gap:12,
-            padding:'6px 0', borderTop:'1px solid #333',
-          }}>
+          <div className="header-controls">
             <label style={{ color:'#aaa', fontSize:11 }}>Mode:</label>
             <select
               value={scanMode}
@@ -120,7 +117,7 @@ export const Header: React.FC<HeaderProps> = ({
               <option value="both">Both</option>
             </select>
 
-            <div style={{ display:'flex', gap:1, marginLeft:8 }}>
+            <div className="header-presets" style={{ marginLeft:8 }}>
               {presets.map(p => (
                 <button
                   key={p}
@@ -139,7 +136,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             <div style={{ marginLeft:'auto' }}>
               <button onClick={onSwapOpen} className="btn-classic btn-accent" style={{ fontSize:12 }}>
-                 Quick Swap
+                Quick Swap
               </button>
             </div>
           </div>

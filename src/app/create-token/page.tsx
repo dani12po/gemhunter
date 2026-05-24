@@ -332,7 +332,7 @@ export default function CreateTokenPage() {
             </button>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32 }}>
+          <div className="create-token-grid">
             {/* Form */}
             <div style={{ background: '#242424', border: '1px solid #3a3a3a', borderTop: '3px solid #f5a623', borderRadius: 12, padding: 32 }}>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">

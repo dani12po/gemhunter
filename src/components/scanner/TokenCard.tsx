@@ -59,13 +59,8 @@ export const TokenCard: React.FC<TokenCardProps> = ({ token, onSwap }) => {
       marginBottom:0,
     }}>
       {/* Card header */}
-      <div style={{
-        display:'flex', alignItems:'center', justifyContent:'space-between',
-        padding:'8px 12px',
-        background:'#2e2e2e',
-        borderBottom:'1px solid #3a3a3a',
-      }}>
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+      <div className="token-card-header">
+        <div className="token-card-left">
           {token.imageUrl && (
             <img src={token.imageUrl} alt={token.nama}
               style={{ width:28, height:28, border:'1px solid #555' }}
@@ -95,7 +90,7 @@ export const TokenCard: React.FC<TokenCardProps> = ({ token, onSwap }) => {
             {narrativeBadge.label}
           </span>
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+        <div className="token-card-right">
           <span style={{
             background: token.skor >= 70 ? '#2a3a0a' : token.skor >= 50 ? '#1a2a3a' : '#2a1a1a',
             border: `1px solid ${token.skor >= 70 ? '#5cb85c' : token.skor >= 50 ? '#5b9bd5' : '#d9534f'}`,

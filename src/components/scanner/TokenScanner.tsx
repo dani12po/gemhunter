@@ -115,13 +115,7 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
     }}>
 
       {/* ── Stats Bar ── */}
-      <div style={{ 
-        display: 'grid', 
-        gridTemplateColumns: 'repeat(5, 1fr)', 
-        gap: 8, 
-        marginBottom: 20,
-        padding: '0 8px',
-      }}>
+      <div className="stats-bar" style={{ padding: '0 8px', marginBottom: 20 }}>
         {statItems.map(s => (
           <div key={s.label} style={{
             background: '#242424',
@@ -240,7 +234,7 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
         <div style={{ color: '#777', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>
           Numeric Filters
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
+        <div className="filter-inputs">
           {(Object.entries(labelMap) as [keyof FilterData, string][]).map(([key, label]) => (
             <div key={key}>
               <div style={{ color: '#666', fontSize: 10, marginBottom: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -353,7 +347,7 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
 
       {/* ── Loading skeletons ── */}
       {loading && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+        <div className="token-grid">
           {[...Array(6)].map((_, i) => <TokenSkeleton key={i} />)}
         </div>
       )}
@@ -373,7 +367,7 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
       {/* ── Token Grid ── */}
       {!loading && tokens.length > 0 && (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 24 }}>
+          <div className="token-grid">
             {(preset === 'narrative' && selectedNarrative !== 'all'
               ? tokens.filter(t => detectNarrative(t) === selectedNarrative)
               : tokens

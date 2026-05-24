@@ -124,7 +124,6 @@ input::-webkit-inner-spin-button {
 
 /* ─── Responsive grid untuk TokenScanner ─── */
 @media (max-width: 900px) {
-  /* Override inline grid di TokenScanner */
   .scanner-grid { grid-template-columns: repeat(2, 1fr) !important; }
   .stats-grid   { grid-template-columns: repeat(3, 1fr) !important; }
   .filter-grid  { grid-template-columns: repeat(4, 1fr) !important; }
@@ -138,3 +137,114 @@ input::-webkit-inner-spin-button {
 /* Hide scrollbar for TokenSelectorModal */
 .hide-scrollbar::-webkit-scrollbar { display: none; }
 .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ═══════════════════════════════════════════════════
+   RESPONSIVE — Mobile First
+   ═══════════════════════════════════════════════════ */
+
+/* Prevent horizontal overflow */
+html, body { overflow-x: hidden; }
+
+/* ── Header ── */
+.header-nav { display: flex; gap: 0; overflow-x: auto; }
+.header-nav::-webkit-scrollbar { display: none; }
+.header-nav { -ms-overflow-style: none; scrollbar-width: none; }
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid #333;
+  flex-wrap: wrap;
+}
+
+.header-presets { display: flex; gap: 1px; flex-wrap: wrap; }
+
+/* ── Stats bar ── */
+.stats-bar {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+/* ── Token grid ── */
+.token-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+/* ── Filter grid ── */
+.filter-inputs {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+
+/* ── Token card header ── */
+.token-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #2e2e2e;
+  border-bottom: 1px solid #3a3a3a;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.token-card-left  { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.token-card-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* ── Liquidity page grid ── */
+.liquidity-grid {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 24px;
+}
+
+/* ── Create token grid ── */
+.create-token-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+}
+
+/* ── Wallet button compact on mobile ── */
+@media (max-width: 480px) {
+  .wallet-adapter-button { font-size: 11px !important; padding: 0 10px !important; height: 30px !important; }
+  .wallet-adapter-button .wallet-adapter-button-start-icon { display: none !important; }
+}
+
+/* ── Tablet (≤ 900px) ── */
+@media (max-width: 900px) {
+  .stats-bar        { grid-template-columns: repeat(3, 1fr); }
+  .token-grid       { grid-template-columns: repeat(2, 1fr); }
+  .filter-inputs    { grid-template-columns: repeat(4, 1fr); }
+  .liquidity-grid   { grid-template-columns: 1fr; }
+  .create-token-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Mobile (≤ 600px) ── */
+@media (max-width: 600px) {
+  .stats-bar     { grid-template-columns: repeat(2, 1fr); }
+  .token-grid    { grid-template-columns: 1fr; }
+  .filter-inputs { grid-template-columns: repeat(2, 1fr); }
+
+  /* Header: hide full nav text, show scrollable */
+  .header-nav a { padding: 10px 10px !important; font-size: 11px !important; }
+
+  /* Reduce header height padding */
+  .page-content { padding-top: 80px !important; }
+}
+
+/* ── Small mobile (≤ 400px) ── */
+@media (max-width: 400px) {
+  .stats-bar { grid-template-columns: repeat(2, 1fr); }
+  .token-grid { grid-template-columns: 1fr; }
+  .filter-inputs { grid-template-columns: 1fr 1fr; }
+  .header-nav a { padding: 8px 8px !important; font-size: 10px !important; }
+}

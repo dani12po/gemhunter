@@ -1055,7 +1055,7 @@ export default function LiquidityPage() {
           </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 24 }}>
+        <div className="liquidity-grid">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             {activeTab === 'add' ? (
               <>
