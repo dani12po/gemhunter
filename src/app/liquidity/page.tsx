@@ -381,7 +381,9 @@ export default function LiquidityPage() {
   const { connection }                            = useConnection();
   const { publicKey, sendTransaction, signTransaction, connected } = useWallet();
 
-  const [network, setNetwork]       = useState<NetworkMode>('devnet');
+  const [network, setNetwork] = useState<NetworkMode>(
+    (process.env.NEXT_PUBLIC_NETWORK as NetworkMode) === 'mainnet-beta' ? 'mainnet' : 'devnet'
+  );
   const [activeTab, setActiveTab]   = useState<PageTab>('add');
   const [isSwapOpen, setIsSwapOpen] = useState(false);
   const [selectedDex, setSelectedDex] = useState<DexProvider>('raydium');
