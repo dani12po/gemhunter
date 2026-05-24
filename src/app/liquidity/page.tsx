@@ -1,8 +1,6 @@
-// placeholder
 'use client';
 /**
- * LIQUIDITY PAGE — CPMM Raydium SDK v2 (0.2.45-alpha)
- * Add Liquidity + Remove Liquidity + Pool Stats + User Position
+ * LIQUIDITY PAGE — Raydium CPMM Support
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -21,7 +19,6 @@ import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getMint,
-  getAccount,
 } from '@solana/spl-token';
 import {
   Raydium,
@@ -31,11 +28,9 @@ import {
   DEVNET_PROGRAM_ID,
   getCpmmPdaAmmConfigId,
   getCpmmPdaPoolId,
-  Percent,
 } from '@raydium-io/raydium-sdk-v2';
 import type { DexProvider } from '../../lib/dex';
-import { DEX_ADAPTERS } from '../../lib/dex';
-import BN from 'bn.js';
+import { DEX_ADAPTERS, executeCreatePool, executeAddLiquidity, executeRemoveLiquidity } from '../../lib/dex';
 import Decimal from 'decimal.js';
 
 // Set high precision for financial calculations
@@ -62,6 +57,8 @@ interface TokenMeta {
   name:     string;
   decimals: number;
   logoURI?: string;
+  created_at?: number; // timestamp
+  supply?: bigint;
 }
 
 interface PoolInfo {
@@ -84,6 +81,26 @@ interface UserPoolPosition {
   valueB:       string;
 }
 
+interface DetectedLpPool {
+  poolId: string;
+  lpMint: string;
+  lpDecimals: number;
+  lpBalanceRaw: bigint;
+  lpBalance: string;
+  mintA: string;
+  mintB: string;
+  symbolA: string;
+  symbolB: string;
+  decimalsA: number;
+  decimalsB: number;
+  reserveA: bigint;
+  reserveB: bigint;
+  lpSupply: bigint;
+  tradeFeeRate: number;
+  sharePercent: string;
+  poolName: string; // e.g. "SOL / PEPE"
+}
+
 // ─── HELPERS ──────────────────────────────────────────────────
 function isValidSolanaAddress(s: string): boolean {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s.trim());
@@ -91,6 +108,10 @@ function isValidSolanaAddress(s: string): boolean {
 
 function shortAddr(s: string): string {
   return s.length > 12 ? `${s.slice(0, 6)}...${s.slice(-4)}` : s;
+}
+
+function copyToClipboard(text: string) {
+  navigator.clipboard.writeText(text).catch(() => {});
 }
 
 function formatAmount(raw: bigint, decimals: number, dp = 4): string {
@@ -102,7 +123,6 @@ function formatAmount(raw: bigint, decimals: number, dp = 4): string {
   return `${whole}.${fracStr}`;
 }
 
-// Helper untuk menampilkan harga sangat kecil (bisa sampai 18 desimal)
 function formatSmallPrice(num: number): string {
   if (num === 0) return '0';
   if (num < 1e-18) return num.toExponential(4);
@@ -110,50 +130,20 @@ function formatSmallPrice(num: number): string {
   return num.toFixed(decimals).replace(/\.?0+$/, '');
 }
 
-// Gemini-recommended precise calculation function
-function calculatePoolAmounts(tokenBAmountStr: string, targetPriceUsdStr: string, solPriceUsd: number = 150) {
-  try {
-    const tokenBAmount = new Decimal(tokenBAmountStr);
-    const tokenPriceInSol = new Decimal(targetPriceUsdStr).div(solPriceUsd);
-    const totalSolRequired = tokenBAmount.mul(tokenPriceInSol);
-
-    // Always return clean decimal strings (no scientific notation)
-    return {
-      solAmount: totalSolRequired.toFixed(9),
-      tokenBAmount: tokenBAmount.toFixed(9),
-    };
-  } catch (err) {
-    console.error("Gagal menghitung rasio pool:", err);
-    return null;
-  }
-}
-
 function toRaw(amount: string, decimals: number): bigint {
   if (!amount || isNaN(parseFloat(amount))) return 0n;
-
-  // Handle scientific notation (e.g. 1.5e-7)
-  const num = parseFloat(amount);
-  if (num < 1e-10) {
-    // Use Decimal-like precision for very small numbers
-    const [base, exp] = amount.toLowerCase().split('e');
-    if (exp) {
-      const decimalPlaces = Math.abs(parseInt(exp));
-      const clean = base.replace('.', '');
-      const padded = clean.padEnd(clean.length + decimalPlaces, '0');
-      return BigInt(padded);
-    }
+  try {
+    const d = new Decimal(amount).mul(new Decimal(10).pow(decimals));
+    return BigInt(d.toFixed(0));
+  } catch {
+    return 0n;
   }
-
-  const [intPart, fracPart = ''] = amount.split('.');
-  const fracs = (fracPart + '0'.repeat(decimals)).slice(0, decimals);
-  return BigInt(intPart || '0') * BigInt(10 ** decimals) + BigInt(fracs || '0');
 }
 
 async function fetchTokenMeta(mint: string, conn: Connection): Promise<TokenMeta | null> {
   if (mint === SOL_MINT) {
-    return { mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9 };
+    return { mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, supply: 0n };
   }
-
   try {
     const info = await getMint(conn, new PublicKey(mint));
     return {
@@ -161,6 +151,7 @@ async function fetchTokenMeta(mint: string, conn: Connection): Promise<TokenMeta
       symbol: shortAddr(mint),
       name: `Token (${shortAddr(mint)})`,
       decimals: info.decimals,
+      supply: info.supply,
     };
   } catch {
     return null;
@@ -183,65 +174,6 @@ async function getTokenBalance(
   }
 }
 
-async function initRaydium(conn: Connection, owner: PublicKey, network: NetworkMode): Promise<Raydium> {
-  return Raydium.load({
-    connection:          conn,
-    owner,
-    cluster:             network === 'devnet' ? 'devnet' : 'mainnet',
-    disableFeatureCheck: true,
-    blockhashCommitment: 'confirmed',
-  });
-}
-
-async function findCpmmPool(
-  conn: Connection, mintA: string, mintB: string, network: NetworkMode
-): Promise<PoolInfo | null> {
-  const programId = network === 'devnet'
-    ? DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_PROGRAM
-    : CREATE_CPMM_POOL_PROGRAM;
-
-  for (const cfg of CPMM_FEE_CONFIGS) {
-    for (const [mA, mB] of [[mintA, mintB], [mintB, mintA]]) {
-      try {
-        const configPda = getCpmmPdaAmmConfigId(programId, cfg.index);
-        const poolPda   = getCpmmPdaPoolId(
-          programId,
-          configPda.publicKey,
-          new PublicKey(mA),
-          new PublicKey(mB)
-        );
-        const accountInfo = await conn.getAccountInfo(poolPda.publicKey);
-        if (!accountInfo) continue;
-
-        const poolState = CpmmPoolInfoLayout.decode(accountInfo.data);
-
-        // Ambil reserve dari vault token accounts
-        let reserveA = 0n;
-        let reserveB = 0n;
-        try {
-          const vaultAInfo = await conn.getTokenAccountBalance(poolState.vaultA);
-          const vaultBInfo = await conn.getTokenAccountBalance(poolState.vaultB);
-          reserveA = BigInt(vaultAInfo.value.amount);
-          reserveB = BigInt(vaultBInfo.value.amount);
-        } catch { /* vault fetch gagal, gunakan 0 */ }
-
-        return {
-          exists:         true,
-          poolId:         poolPda.publicKey.toString(),
-          lpMint:         poolState.mintLp.toString(),
-          lpDecimals:     poolState.lpDecimals,
-          feeConfigIndex: cfg.index,
-          tradeFeeRate:   cfg.tradeFeeRate,
-          reserveA,
-          reserveB,
-          lpSupply:       BigInt(poolState.lpAmount?.toString() ?? '0'),
-        };
-      } catch { continue; }
-    }
-  }
-  return null;
-}
-
 function calcLpReceived(pool: PoolInfo, rawA: bigint, rawB: bigint): bigint {
   const MINIMUM_LIQUIDITY = 1000n;
   if (pool.lpSupply === 0n || pool.reserveA === 0n || pool.reserveB === 0n) {
@@ -262,24 +194,206 @@ function calcRemoveOutput(pool: PoolInfo, lpBurned: bigint): { outA: bigint; out
   };
 }
 
+async function scanWalletLpPools(
+  connection: Connection,
+  owner: PublicKey,
+  network: NetworkMode
+): Promise<DetectedLpPool[]> {
+  try {
+    const { CpmmPoolInfoLayout, DEVNET_PROGRAM_ID, CREATE_CPMM_POOL_PROGRAM } =
+      await import('@raydium-io/raydium-sdk-v2');
+
+    const CPMM_PROGRAM_MAINNET = CREATE_CPMM_POOL_PROGRAM.toBase58();
+    const CPMM_PROGRAM_DEVNET  = DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_PROGRAM.toBase58();
+    const CPMM_PROGRAM_ID      = network === 'devnet' ? CPMM_PROGRAM_DEVNET : CPMM_PROGRAM_MAINNET;
+
+    // Helper: decode field name yang benar dari SDK (mintLp, bukan lpMint)
+    const getLpMint = (state: any): string =>
+      (state.mintLp ?? state.lpMint)?.toBase58?.() ?? '';
+
+    // Step 1: Ambil semua token accounts wallet dengan balance > 0
+    const allTokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      owner, { programId: TOKEN_PROGRAM_ID }
+    );
+    const candidates = allTokenAccounts.value.filter(({ account }) => {
+      const amount = account.data.parsed?.info?.tokenAmount?.amount;
+      return amount && BigInt(amount) > 0n;
+    });
+    if (candidates.length === 0) return [];
+
+    const lpMintSet = new Set(candidates.map(c => c.account.data.parsed.info.mint as string));
+
+    // Step 2: Batch fetch mint accounts untuk cek mintAuthority
+    const mintPubkeys = candidates.map(({ account }) =>
+      new PublicKey(account.data.parsed.info.mint)
+    );
+    const mintAccountInfos = await connection.getMultipleAccountsInfo(mintPubkeys);
+
+    const validEntries: Array<{
+      lpMint: string;
+      rawAmount: bigint;
+      poolId: PublicKey;
+      poolData: Buffer;
+    }> = [];
+
+    // Step 3: Untuk setiap token, cek apakah mintAuthority-nya adalah pool CPMM
+    // Layout SPL Mint: [36 bytes header] [4: hasAuthority flag] [5-36: authority pubkey]
+    // Raydium CPMM: mintAuthority LP token = pool account address itu sendiri
+    const authorityPubkeys: (PublicKey | null)[] = mintAccountInfos.map((info) => {
+      if (!info || info.data.length < 82) return null;
+      if (info.data[4] !== 1) return null; // no authority
+      try { return new PublicKey(info.data.slice(5, 37)); }
+      catch { return null; }
+    });
+
+    // Batch fetch semua authority accounts sekaligus
+    const authorityKeys = authorityPubkeys.map(p => p ?? PublicKey.default);
+    const authorityAccountInfos = await connection.getMultipleAccountsInfo(authorityKeys);
+
+    for (let i = 0; i < candidates.length; i++) {
+      const authPubkey = authorityPubkeys[i];
+      const authAccount = authorityAccountInfos[i];
+      if (!authPubkey || !authAccount) continue;
+
+      const lpMintStr = candidates[i].account.data.parsed.info.mint as string;
+      const rawAmount = BigInt(candidates[i].account.data.parsed.info.tokenAmount.amount);
+      const ownerStr  = authAccount.owner.toBase58();
+      const isCpmm    = ownerStr === CPMM_PROGRAM_MAINNET || ownerStr === CPMM_PROGRAM_DEVNET;
+
+      if (!isCpmm || authAccount.data.length < 300) continue;
+
+      try {
+        const poolState = CpmmPoolInfoLayout.decode(authAccount.data) as any;
+        if (getLpMint(poolState) === lpMintStr) {
+          validEntries.push({
+            lpMint: lpMintStr,
+            rawAmount,
+            poolId: authPubkey,
+            poolData: Buffer.from(authAccount.data),
+          });
+        }
+      } catch { /* not a valid CPMM pool */ }
+    }
+
+    // Step 4: Fallback — query program accounts dengan memcmp filter pada offset mintLp = 136
+    // Hanya untuk token yang belum ditemukan di step 3
+    const foundMints = new Set(validEntries.map(e => e.lpMint));
+    const missing = candidates.filter(c =>
+      !foundMints.has(c.account.data.parsed.info.mint as string)
+    );
+
+    if (missing.length > 0) {
+      for (const candidate of missing) {
+        const lpMintStr = candidate.account.data.parsed.info.mint as string;
+        const rawAmount = BigInt(candidate.account.data.parsed.info.tokenAmount.amount);
+        try {
+          // Offset 136 = mintLp field dalam CpmmPoolInfoLayout
+          // Layout: discriminator(8) + configId(32) + poolCreator(32) + vaultA(32) + vaultB(32) + mintLp(32)
+          const pools = await connection.getProgramAccounts(
+            new PublicKey(CPMM_PROGRAM_ID),
+            {
+              filters: [
+                { memcmp: { offset: 136, bytes: lpMintStr } }
+              ]
+            }
+          ).catch(() => []);
+
+          if (pools.length > 0) {
+            const p = pools[0];
+            try {
+              const poolState = CpmmPoolInfoLayout.decode(p.account.data) as any;
+              if (getLpMint(poolState) === lpMintStr) {
+                validEntries.push({
+                  lpMint: lpMintStr,
+                  rawAmount,
+                  poolId: p.pubkey,
+                  poolData: Buffer.from(p.account.data),
+                });
+              }
+            } catch { /* skip */ }
+          }
+        } catch { /* skip */ }
+      }
+    }
+
+    if (validEntries.length === 0) return [];
+
+    // Step 5: Decode pool data dan ambil reserve info
+    const results = await Promise.all(
+      validEntries.map(async (entry): Promise<DetectedLpPool | null> => {
+        try {
+          const poolState = CpmmPoolInfoLayout.decode(entry.poolData) as any;
+          const mintAStr: string = poolState.mintA?.toBase58?.() ?? '';
+          const mintBStr: string = poolState.mintB?.toBase58?.() ?? '';
+          if (!mintAStr || !mintBStr) return null;
+
+          const [vaultA, vaultB, metaA, metaB] = await Promise.all([
+            connection.getTokenAccountBalance(poolState.vaultA).catch(() => null),
+            connection.getTokenAccountBalance(poolState.vaultB).catch(() => null),
+            fetchTokenMeta(mintAStr, connection),
+            fetchTokenMeta(mintBStr, connection),
+          ]);
+
+          if (!vaultA || !vaultB) return null;
+
+          const reserveA    = BigInt(vaultA.value.amount);
+          const reserveB    = BigInt(vaultB.value.amount);
+          // SDK field: lpAmount (bukan lpSupply)
+          const lpSupply    = BigInt(poolState.lpAmount?.toString() ?? '0');
+          // SDK field: lpDecimals
+          const lpDecimals  = Number(poolState.lpDecimals ?? 9);
+          const sharePercent = lpSupply > 0n
+            ? ((Number(entry.rawAmount) / Number(lpSupply)) * 100).toFixed(4)
+            : '0';
+
+          return {
+            poolId:       entry.poolId.toBase58(),
+            lpMint:       entry.lpMint,
+            lpDecimals,
+            lpBalanceRaw: entry.rawAmount,
+            lpBalance:    formatAmount(entry.rawAmount, lpDecimals),
+            mintA:        mintAStr,
+            mintB:        mintBStr,
+            symbolA:      metaA?.symbol ?? shortAddr(mintAStr),
+            symbolB:      metaB?.symbol ?? shortAddr(mintBStr),
+            decimalsA:    metaA?.decimals ?? 9,
+            decimalsB:    metaB?.decimals ?? 9,
+            reserveA,
+            reserveB,
+            lpSupply,
+            tradeFeeRate: 2500,
+            sharePercent,
+            poolName: `${metaA?.symbol ?? shortAddr(mintAStr)} / ${metaB?.symbol ?? shortAddr(mintBStr)}`,
+          };
+        } catch { return null; }
+      })
+    );
+
+    return results.filter((r): r is DetectedLpPool => r !== null);
+  } catch (e) {
+    console.error('scanWalletLpPools error:', e);
+    return [];
+  }
+}
+
 // ─── MAIN COMPONENT ───────────────────────────────────────────
 export default function LiquidityPage() {
   const { connection }                            = useConnection();
   const { publicKey, sendTransaction, signTransaction, connected } = useWallet();
 
   const [network, setNetwork]       = useState<NetworkMode>('devnet');
-  const [tab, setTab]               = useState<PageTab>('add');
+  const [activeTab, setActiveTab]   = useState<PageTab>('add');
   const [isSwapOpen, setIsSwapOpen] = useState(false);
   const [selectedDex, setSelectedDex] = useState<DexProvider>('raydium');
   const [isLoading, setIsLoading]   = useState(false);
 
-  const activeConn = network === 'devnet'
+  const activeConn = React.useMemo(() => network === 'devnet'
     ? new Connection(DEVNET_RPC,  'confirmed')
-    : new Connection(MAINNET_RPC, 'confirmed');
+    : new Connection(MAINNET_RPC, 'confirmed'), [network]);
 
   // Token A
   const [mintAInput, setMintAInput] = useState(SOL_MINT);
-  const [tokenA, setTokenA]         = useState<TokenMeta | null>({ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9 });
+  const [tokenA, setTokenA]         = useState<TokenMeta | null>({ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, supply: 0n });
   const [loadingA, setLoadingA]     = useState(false);
   const [errorA, setErrorA]         = useState('');
   const [balanceA, setBalanceA]     = useState('—');
@@ -295,6 +409,7 @@ export default function LiquidityPage() {
   const [amountA, setAmountA] = useState('');
   const [amountB, setAmountB] = useState('');
   const [targetPriceUsd, setTargetPriceUsd] = useState('');
+  const [solPrice, setSolPrice] = useState(150); // Default fallback
 
   // Fee config
   const [feeConfigIndex, setFeeConfigIndex] = useState(0);
@@ -315,11 +430,44 @@ export default function LiquidityPage() {
   const [txSig, setTxSig]       = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Remove Liquidity Overhaul States
+  const [detectedPools, setDetectedPools] = useState<DetectedLpPool[]>([]);
+  const [scanningPools, setScanningPools] = useState(false);
+  const [selectedLpPool, setSelectedLpPool] = useState<DetectedLpPool | null>(null);
+
+  const [feeEarned, setFeeEarned] = useState<{tokenA: string, tokenB: string} | null>(null);
+  const [lockMonths, setLockMonths] = useState(0);
+  const [lockInfo, setLockInfo] = useState<{
+    lockedUntil: number;
+    lockTx: string;
+    lpAmount: string;
+  } | null>(null);
+
+  // Prefill state — set when "Tambah Liquidity" clicked from Remove tab
+  const [prefillAddLiquidity, setPrefillAddLiquidity] = useState<{
+    tokenBMint: string;
+    poolId: string;
+    poolName: string;
+  } | null>(null);
+
+  // Toast state
+  const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const showToast = (msg: string, type: 'success' | 'error' | 'info' = 'info') => {
+    clearTimeout(toastTimerRef.current);
+    setToast({ msg, type });
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  };
+
   const isTxLoading    = ['building', 'signing', 'confirming'].includes(txStatus);
   const explorerSuffix = network === 'devnet' ? '?cluster=devnet' : '';
 
   const timerA = useRef<ReturnType<typeof setTimeout>>();
   const timerB = useRef<ReturnType<typeof setTimeout>>();
+  const timerPool = useRef<ReturnType<typeof setTimeout>>();
+  const timerPos = useRef<ReturnType<typeof setTimeout>>();
+  const timerBal = useRef<ReturnType<typeof setTimeout>>();
 
   // Lookup Token A
   useEffect(() => {
@@ -335,7 +483,7 @@ export default function LiquidityPage() {
         else { setTokenA(null); setErrorA('Token tidak ditemukan'); }
       });
     }, 400);
-  }, [mintAInput, network]);
+  }, [mintAInput, network, activeConn]);
 
   // Lookup Token B
   useEffect(() => {
@@ -351,28 +499,55 @@ export default function LiquidityPage() {
         else { setTokenB(null); setErrorB('Token tidak ditemukan — pastikan mint address benar'); }
       });
     }, 400);
-  }, [mintBInput, network]);
+  }, [mintBInput, network, activeConn]);
 
-  // Check pool
+  // Check pool existence
   useEffect(() => {
+    clearTimeout(timerPool.current);
     if (!tokenA || !tokenB) { setPool(null); return; }
+    
     setCheckingPool(true);
-    findCpmmPool(activeConn, tokenA.mint, tokenB.mint, network).then(info => {
-      setCheckingPool(false);
-      setPool(info);
-    });
-  }, [tokenA?.mint, tokenB?.mint, network]);
+    timerPool.current = setTimeout(() => {
+      const adapter = DEX_ADAPTERS[selectedDex];
+      if (adapter && adapter.findPool) {
+        adapter.findPool(activeConn, tokenA.mint, tokenB.mint, network).then(info => {
+          setCheckingPool(false);
+          setPool(info as any);
+        }).catch(() => {
+          setCheckingPool(false);
+          setPool(null);
+        });
+      } else {
+        setCheckingPool(false);
+        setPool(null);
+      }
+    }, 500);
+  }, [tokenA?.mint, tokenB?.mint, network, selectedDex, activeConn]);
 
-  // Balances
+  // Balances & SOL Price
   useEffect(() => {
-    if (!publicKey || !tokenA) { setBalanceA('—'); return; }
-    getTokenBalance(activeConn, publicKey, tokenA.mint, tokenA.decimals).then(r => setBalanceA(r.formatted));
-  }, [publicKey, tokenA?.mint, network, txStatus]);
+    fetch('https://api.jup.ag/price/v2?ids=So11111111111111111111111111111111111111112')
+      .then(res => res.json())
+      .then(data => {
+        const price = data?.data?.So11111111111111111111111111111111111111112?.price;
+        if (price) setSolPrice(parseFloat(price));
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
-    if (!publicKey || !tokenB) { setBalanceB('—'); return; }
-    getTokenBalance(activeConn, publicKey, tokenB.mint, tokenB.decimals).then(r => setBalanceB(r.formatted));
-  }, [publicKey, tokenB?.mint, network, txStatus]);
+    clearTimeout(timerBal.current);
+    if (!publicKey) { setBalanceA('—'); setBalanceB('—'); return; }
+
+    timerBal.current = setTimeout(() => {
+      if (tokenA) {
+        getTokenBalance(activeConn, publicKey, tokenA.mint, tokenA.decimals).then(r => setBalanceA(r.formatted));
+      }
+      if (tokenB) {
+        getTokenBalance(activeConn, publicKey, tokenB.mint, tokenB.decimals).then(r => setBalanceB(r.formatted));
+      }
+    }, 700);
+  }, [publicKey, tokenA?.mint, tokenB?.mint, network, txStatus, activeConn]);
 
   // LP preview
   useEffect(() => {
@@ -385,25 +560,126 @@ export default function LiquidityPage() {
 
   // User LP position
   useEffect(() => {
-    if (!publicKey || !pool) { setUserPosition(null); return; }
-    (async () => {
-      try {
-        const lpAta     = await getAssociatedTokenAddress(new PublicKey(pool.lpMint), publicKey);
-        const lpAccount = await getAccount(activeConn, lpAta).catch(() => null);
-        if (!lpAccount) { setUserPosition(null); return; }
-        const raw    = BigInt(lpAccount.amount.toString());
-        const share  = pool.lpSupply > 0n ? ((Number(raw) / Number(pool.lpSupply)) * 100).toFixed(4) : '0';
-        const { outA, outB } = calcRemoveOutput(pool, raw);
-        setUserPosition({
-          lpBalance:    formatAmount(raw, pool.lpDecimals),
-          lpBalanceRaw: raw,
-          sharePercent: share,
-          valueA:       tokenA ? formatAmount(outA, tokenA.decimals) : '—',
-          valueB:       tokenB ? formatAmount(outB, tokenB.decimals) : '—',
-        });
-      } catch { setUserPosition(null); }
-    })();
-  }, [publicKey, pool, network, txStatus]);
+    clearTimeout(timerPos.current);
+    if (!publicKey || !pool || activeTab === 'remove') {
+      return;
+    }
+    
+    timerPos.current = setTimeout(() => {
+      const adapter = DEX_ADAPTERS[selectedDex];
+      if (!adapter || !adapter.fetchPosition) { setUserPosition(null); return; }
+
+      adapter.fetchPosition(activeConn, publicKey, pool as any).then(pos => {
+        if (!pos) {
+          setUserPosition(null);
+          return;
+        }
+        
+        // Format values if they are raw strings from adapter
+        const formattedPos = { ...pos };
+        if (tokenA && tokenB && pool.lpDecimals) {
+          formattedPos.lpBalance = formatAmount(pos.lpBalanceRaw, pool.lpDecimals);
+          formattedPos.valueA = formatAmount(BigInt(pos.valueA), tokenA.decimals);
+          formattedPos.valueB = formatAmount(BigInt(pos.valueB), tokenB.decimals);
+        }
+
+        setUserPosition(formattedPos);
+
+        // Calculate Fee Earned
+        if (formattedPos && pool && tokenA && tokenB) {
+          const feeRateDecimal = pool.tradeFeeRate / 1_000_000;
+          const shareDecimal = parseFloat(formattedPos.sharePercent) / 100;
+          const earnedA = (Number(pool.reserveA) * feeRateDecimal * shareDecimal);
+          const earnedB = (Number(pool.reserveB) * feeRateDecimal * shareDecimal);
+          
+          setFeeEarned({
+            tokenA: (earnedA / Math.pow(10, tokenA.decimals)).toFixed(6),
+            tokenB: (earnedB / Math.pow(10, tokenB.decimals)).toFixed(6),
+          });
+        } else {
+          setFeeEarned(null);
+        }
+      }).catch(() => {
+        setUserPosition(null);
+        setFeeEarned(null);
+      });
+    }, 600);
+  }, [publicKey, pool, network, txStatus, selectedDex, activeConn, tokenA, tokenB]);
+
+  // Auto-scan LP pools when switching to Remove tab
+  useEffect(() => {
+    if (activeTab === 'remove' && publicKey && connected) {
+      setScanningPools(true);
+      setSelectedLpPool(null);
+      scanWalletLpPools(activeConn, publicKey, network)
+        .then(pools => {
+          setDetectedPools(pools);
+          if (pools.length > 0) setSelectedLpPool(pools[0]);
+        })
+        .finally(() => setScanningPools(false));
+    }
+  }, [activeTab, publicKey, connected, network, activeConn]);
+
+  // Consume prefill when Add tab becomes active
+  useEffect(() => {
+    if (activeTab === 'add' && prefillAddLiquidity) {
+      setMintAInput(SOL_MINT);
+      setMintBInput(prefillAddLiquidity.tokenBMint);
+      setPrefillAddLiquidity(null);
+    }
+  }, [activeTab, prefillAddLiquidity]);
+
+  // Sync selectedLpPool to existing states for compatibility
+  useEffect(() => {
+    if (selectedLpPool && activeTab === 'remove') {
+      const p: PoolInfo = {
+        exists: true,
+        poolId: selectedLpPool.poolId,
+        lpMint: selectedLpPool.lpMint,
+        lpDecimals: selectedLpPool.lpDecimals,
+        feeConfigIndex: 0,
+        tradeFeeRate: selectedLpPool.tradeFeeRate,
+        reserveA: selectedLpPool.reserveA,
+        reserveB: selectedLpPool.reserveB,
+        lpSupply: selectedLpPool.lpSupply,
+      };
+      setPool(p);
+      setTokenA({
+        mint: selectedLpPool.mintA,
+        symbol: selectedLpPool.symbolA,
+        name: selectedLpPool.symbolA,
+        decimals: selectedLpPool.decimalsA,
+        supply: 0n
+      });
+      setTokenB({
+        mint: selectedLpPool.mintB,
+        symbol: selectedLpPool.symbolB,
+        name: selectedLpPool.symbolB,
+        decimals: selectedLpPool.decimalsB,
+        supply: 0n
+      });
+      
+      const shareDecimal = parseFloat(selectedLpPool.sharePercent) / 100;
+      
+      const pos = {
+        lpBalance: selectedLpPool.lpBalance,
+        lpBalanceRaw: selectedLpPool.lpBalanceRaw,
+        sharePercent: selectedLpPool.sharePercent,
+        valueA: p.lpSupply > 0n ? formatAmount((selectedLpPool.lpBalanceRaw * p.reserveA) / p.lpSupply, selectedLpPool.decimalsA) : '0',
+        valueB: p.lpSupply > 0n ? formatAmount((selectedLpPool.lpBalanceRaw * p.reserveB) / p.lpSupply, selectedLpPool.decimalsB) : '0',
+      };
+      setUserPosition(pos);
+
+      // Calculate Fee Earned (Estimated)
+      const feeRateDecimal = selectedLpPool.tradeFeeRate / 1_000_000;
+      const earnedA = (Number(p.reserveA) * feeRateDecimal * shareDecimal);
+      const earnedB = (Number(p.reserveB) * feeRateDecimal * shareDecimal);
+      setFeeEarned({
+        tokenA: (earnedA / Math.pow(10, selectedLpPool.decimalsA)).toFixed(6),
+        tokenB: (earnedB / Math.pow(10, selectedLpPool.decimalsB)).toFixed(6),
+      });
+    }
+  }, [selectedLpPool, activeTab]);
 
   // Remove preview
   useEffect(() => {
@@ -414,742 +690,809 @@ export default function LiquidityPage() {
       outA: tokenA ? formatAmount(outA, tokenA.decimals) : '—',
       outB: tokenB ? formatAmount(outB, tokenB.decimals) : '—',
     });
-  }, [removePercent, userPosition, pool]);
+  }, [removePercent, userPosition, pool, tokenA, tokenB]);
 
   // ─── TX ERROR HANDLER ─────────────────────────────────────
   function handleTxError(err: unknown) {
-    // Log full error ke console untuk debugging
-    console.error('[Liquidity Error]', err);
+    console.error('[Liquidity Error Full Object]', err);
+    let friendly = 'Terjadi kesalahan tidak terduga.';
+    
+    if (err instanceof Error) {
+      friendly = err.message;
+    } else if (typeof err === 'string') {
+      friendly = err;
+    } else if (typeof err === 'object' && err !== null) {
+      const anyErr = err as any;
+      // Try to extract from various common Solana error structures
+      friendly = anyErr.message || anyErr.reason || anyErr.error?.message || anyErr.err?.message || JSON.stringify(err);
+      
+      // Extract logs if available
+      if (anyErr.logs && Array.isArray(anyErr.logs)) {
+        console.log('[Transaction Logs]', anyErr.logs);
+        const errorLog = anyErr.logs.find((l: string) => l.includes('Error:'));
+        if (errorLog) {
+          friendly = `Blockchain Error: ${errorLog.split('Error:')[1].trim()}`;
+        } else {
+          // Check for custom program errors in logs
+          const customErr = anyErr.logs.find((l: string) => l.includes('custom program error:'));
+          if (customErr) {
+            const code = customErr.split('custom program error:')[1].trim();
+            if (code === '0x11') friendly = 'Slippage Error: Harga berubah terlalu cepat.';
+            else if (code === '0x1') friendly = 'Saldo tidak cukup untuk biaya transaksi.';
+            else friendly = `Program Error: ${code}`;
+          }
+        }
+      }
+    }
 
-    const msg = err instanceof Error ? err.message : String(err);
-    const stack = err instanceof Error ? (err.stack ?? '') : '';
-
-    let friendly = msg;
-
-    if (msg.includes('403') || msg.includes('Access forbidden'))
-      friendly = 'RPC error 403 — Set NEXT_PUBLIC_DEVNET_RPC_URL di .env.local (gunakan Helius/Alchemy).';
-    else if (msg.includes('insufficient') || msg.includes('Insufficient'))
-      friendly = 'Saldo tidak cukup — butuh SOL untuk rent (~0.2–0.4 SOL untuk pool baru) + gas fee.';
-    else if (msg.includes('User rejected') || msg.includes('rejected'))
-      friendly = 'Transaksi dibatalkan oleh user.';
-    else if (msg.includes('already in use'))
-      friendly = 'Pool sudah exist untuk pair ini.';
-    else if (msg.includes('0x1'))
-      friendly = 'Program error 0x1 — cek saldo token dan validitas mint address.';
-    else if (msg.includes('0x') && msg.match(/0x[0-9a-f]+/i))
-      friendly = `Program error: ${msg.match(/0x[0-9a-f]+/i)?.[0]} — lihat console untuk detail.`;
-    else if (msg.toLowerCase().includes('simulation'))
-      friendly = `Simulasi transaksi gagal: ${msg}`;
-    else if (msg === 'Unexpected error' || msg.includes('Unexpected error'))
-      friendly = `Error tidak dikenal — lihat browser console (F12) untuk detail lengkap. Raw: ${stack.split('\n')[1] ?? msg}`;
+    const lowerFriendly = friendly.toLowerCase();
+    if (friendly.includes('403')) friendly = 'RPC error 403 — Gunakan RPC private.';
+    else if (lowerFriendly.includes('insufficient') || lowerFriendly.includes('0x1')) {
+      friendly = 'Saldo tidak cukup! Pastikan saldo SOL dan Token mencukupi.';
+    }
+    else if (friendly.includes('rejected')) friendly = 'Transaksi dibatalkan.';
+    else if (friendly.includes('User rejected')) friendly = 'Transaksi ditolak di wallet.';
+    else if (friendly.includes('0x1771')) friendly = 'Slippage Error (0x1771).';
+    else if (lowerFriendly.includes('bounds')) friendly = 'Harga di luar jangkauan (Price out of bounds).';
+    else if (lowerFriendly.includes('blockhash not found')) friendly = 'Blockhash kadaluarsa, silakan coba lagi.';
+    else if (lowerFriendly.includes('too many requests')) friendly = 'RPC Rate Limit — Tunggu sebentar atau ganti RPC.';
 
     setErrorMsg(friendly);
     setTxStatus('error');
     setTxMsg('');
   }
 
-  // ─── SEND TX HELPER — handle versioned + legacy + array ──
-  async function sendTx(tx: Transaction | VersionedTransaction | (Transaction | VersionedTransaction)[]): Promise<string> {
-    if (Array.isArray(tx)) {
-      let lastSig = '';
-      for (const t of tx) {
-        lastSig = await sendTx(t);
-        // Konfirmasi setiap tx sebelum kirim tx berikutnya (penting untuk array)
-        const { blockhash: bh, lastValidBlockHeight: lvbh } = await activeConn.getLatestBlockhash('confirmed');
-        await activeConn.confirmTransaction({ signature: lastSig, blockhash: bh, lastValidBlockHeight: lvbh }, 'confirmed');
-      }
-      return lastSig;
-    }
-
-    // Robust detection untuk VersionedTransaction dari Raydium SDK
-    // (instanceof tidak reliable karena bundling SDK)
-    const isVersionedTx = 
-      (tx as any).version !== undefined || 
-      ((tx as any).message && (tx as any).message.header);
-
-    if (isVersionedTx) {
-      // VersionedTransaction path — harus pakai signTransaction, bukan sendTransaction
-      if (!signTransaction) {
-        throw new Error('Wallet tidak mendukung signTransaction. Gunakan Phantom atau Solflare.');
-      }
-      console.log('[sendTx] Detected VersionedTransaction via duck-typing, menggunakan signTransaction...');
-      const signedTx = await signTransaction(tx as VersionedTransaction);
-      const sig = await activeConn.sendRawTransaction(signedTx.serialize(), {
-        skipPreflight: false,
-        maxRetries:    3,
-      });
-      console.log('[sendTx] VersionedTransaction sent, sig:', sig);
-      return sig;
-    }
-
-    // Legacy Transaction path
-    console.log('[sendTx] Detected Legacy Transaction, menggunakan sendTransaction...');
-    const legacyTx = tx as Transaction;
-    const { blockhash } = await activeConn.getLatestBlockhash('confirmed');
-    legacyTx.recentBlockhash = blockhash;
-    legacyTx.feePayer        = publicKey!;
-    const sig = await sendTransaction(legacyTx, activeConn);
-    console.log('[sendTx] Legacy Transaction sent, sig:', sig);
-    return sig;
-  }
-
-  // ─── BIDIRECTIONAL LIQUIDITY CALCULATOR ─────────────────────
-  const handleAmountAChange = (val: string) => {
-    setAmountA(val);
-    const sol = parseFloat(val);
-    const token = parseFloat(amountB);
-    const target = parseFloat(targetPriceUsd);
-
-    if (sol > 0 && token > 0) {
-      const priceSol = sol / token;
-      const priceUsd = priceSol * 150;
-      setTargetPriceUsd(priceUsd < 1e-6 ? priceUsd.toExponential(6) : priceUsd.toFixed(8));
-    } else if (sol > 0 && target > 0) {
-      const priceSol = target / 150;
-      const neededToken = sol / priceSol;
-      setAmountB(neededToken.toFixed(0));
-    }
-  };
-
-  const handleAmountBChange = (val: string) => {
-    setAmountB(val);
-    const token = parseFloat(val);
-    const sol = parseFloat(amountA);
-    const target = parseFloat(targetPriceUsd);
-
-    if (token > 0 && sol > 0) {
-      const priceSol = sol / token;
-      const priceUsd = priceSol * 150;
-      setTargetPriceUsd(priceUsd < 1e-6 ? priceUsd.toExponential(6) : priceUsd.toFixed(8));
-    } else if (token > 0 && target > 0) {
-      const priceSol = target / 150;
-      const neededSol = token * priceSol;
-      setAmountA(neededSol.toFixed(4));
-    }
-  };
-
-  const handleTargetPriceChange = (val: string) => {
-    // Bersihkan koma menjadi titik (karena Decimal tidak terima koma)
-    const cleanVal = val.replace(',', '.');
-    setTargetPriceUsd(cleanVal);
-
-    if (!cleanVal || !amountB) return;
-
-    try {
-      const tokenBAmount = new Decimal(amountB);
-      const tokenPriceInSol = new Decimal(cleanVal).div(150);
-      const totalSolRequired = tokenBAmount.mul(tokenPriceInSol);
-
-      const cleanSolAmount = totalSolRequired.toFixed(9);
-      setAmountA(cleanSolAmount);
-    } catch (err) {
-      console.error("Gagal menghitung SOL dari target harga:", err);
-    }
-  };
-
-  // ─── ADD LIQUIDITY ────────────────────────────────────────
   const handleAddLiquidity = useCallback(async () => {
-    if (!connected || !publicKey) { setErrorMsg('Hubungkan wallet terlebih dahulu!'); return; }
+    if (!connected || !publicKey || !signTransaction) {
+      setErrorMsg('Hubungkan wallet terlebih dahulu!');
+      return;
+    }
     setIsLoading(true);
-    if (!tokenA) { setErrorMsg('Token A tidak valid!'); return; }
-    if (!tokenB) { setErrorMsg('Token B tidak valid! Paste CA token di kolom Token B.'); return; }
-    if (!amountA || parseFloat(amountA) <= 0) { setErrorMsg('Masukkan jumlah Token A!'); return; }
-    if (!amountB || parseFloat(amountB) <= 0) { setErrorMsg('Masukkan jumlah Token B!'); return; }
+    if (!tokenA) { setErrorMsg('Token A tidak valid!'); setIsLoading(false); return; }
+    if (!tokenB) { setErrorMsg('Token B tidak valid!'); setIsLoading(false); return; }
+    
+    const valA = parseFloat(amountA);
+    const valB = parseFloat(amountB);
+
+    if (!amountA || isNaN(valA) || valA <= 0) { setErrorMsg('Masukkan jumlah Token A!'); setIsLoading(false); return; }
+    if (!amountB || isNaN(valB) || valB <= 0) { setErrorMsg('Masukkan jumlah Token B!'); setIsLoading(false); return; }
+
+    // Balance Check
+    const balA = parseFloat(balanceA.replace('—', '0'));
+    const balB = parseFloat(balanceB.replace('—', '0'));
+
+    if (valA > balA) {
+      setErrorMsg(`Saldo ${tokenA.symbol} tidak cukup! (Punya: ${balanceA})`);
+      setIsLoading(false);
+      return;
+    }
+    if (valB > balB) {
+      setErrorMsg(`Saldo ${tokenB.symbol} tidak cukup! (Punya: ${balanceB})`);
+      setIsLoading(false);
+      return;
+    }
+
+    // Supply Check for Token B (prevent adding more than exists)
+    if (tokenB.supply && tokenB.supply > 0n) {
+      const rawB = toRaw(amountB, tokenB.decimals);
+      if (rawB > tokenB.supply) {
+        setErrorMsg(`Jumlah ${tokenB.symbol} melebihi total supply (${formatAmount(tokenB.supply, tokenB.decimals)})!`);
+        setIsLoading(false);
+        return;
+      }
+    }
 
     setErrorMsg(''); setTxStatus('building'); setTxSig('');
 
     try {
-      const raydium = await initRaydium(activeConn, publicKey, network);
-      // Use precise calculation from Gemini recommendation
-      // Gunakan Decimal untuk konversi ke raw amount (9 decimals)
-      const decimalA = new Decimal(amountA || '0');
-      const decimalB = new Decimal(amountB || '0');
-
-      const rawA = BigInt(decimalA.mul(new Decimal(10).pow(tokenA.decimals)).toFixed(0));
-      const rawB = BigInt(decimalB.mul(new Decimal(10).pow(tokenB.decimals)).toFixed(0));
-
-      console.log('[CreatePool] Final values before Raydium:', {
+      const config = {
+        connection: activeConn,
+        publicKey,
+        sendTransaction,
+        signTransaction,
+        tokenAMint: tokenA.mint,
+        tokenBMint: tokenB.mint,
+        tokenADecimals: tokenA.decimals,
+        tokenBDecimals: tokenB.decimals,
         amountA,
         amountB,
-        targetPriceUsd,
-        rawA: rawA.toString(),
-        rawB: rawB.toString(),
-      });
+        feeTierIndex: feeConfigIndex,
+        network,
+      };
 
-      if (rawA === 0n || rawB === 0n) {
-        alert('Jumlah token terlalu kecil. Naikkan jumlahnya.');
-        setIsLoading(false);
-        return;
-      }
-
-      // Validasi minimum pool size (Raydium CPMM biasanya butuh minimal ~1 SOL)
-      const solAmountNum = parseFloat(amountA);
-      if (solAmountNum < 1) {
-        alert('Minimum 1 SOL diperlukan untuk membuat pool baru di Raydium CPMM.');
-        setIsLoading(false);
-        return;
-      }
-
-      const bnA = new BN(rawA.toString());
-      const bnB = new BN(rawB.toString());
-
-      let tx: Transaction | VersionedTransaction;
-
+      let result;
       if (pool && pool.exists) {
-        setTxMsg('Menghitung optimal liquidity ratio...');
-        console.log('[AddLiquidity] fetching pool info from RPC:', pool.poolId);
-        let poolInfoFull;
-        try {
-          poolInfoFull = await raydium.cpmm.getPoolInfoFromRpc(pool.poolId);
-        } catch (rpcErr) {
-          console.warn('[AddLiquidity] getPoolInfoFromRpc failed, trying fetchPoolById...', rpcErr);
-          // Fallback: fetch via API
-          const pools = await raydium.api.fetchPoolById({ ids: pool.poolId });
-          if (!pools || pools.length === 0) throw new Error('Pool tidak ditemukan via API. Coba refresh halaman.');
-          poolInfoFull = { poolInfo: pools[0] as any, poolKeys: undefined };
-        }
-        console.log('[AddLiquidity] pool info fetched, building tx...');
-        const result = await raydium.cpmm.addLiquidity({
-          poolInfo:            poolInfoFull.poolInfo,
-          poolKeys:            poolInfoFull.poolKeys,
-          inputAmount:         bnA,
-          slippage:            new Percent(1, 100),
-          baseIn:              true,
-          computeBudgetConfig: { units: 600000, microLamports: 100000 },
-        });
-        // SDK v2 bisa return transaction (single) atau transactions (array)
-        const txToSend = (result as any).transactions ?? (result as any).transaction;
-        console.log('[AddLiquidity] addLiquidity tx built, type:', Array.isArray(txToSend) ? `array[${txToSend.length}]` : (txToSend instanceof VersionedTransaction ? 'versioned' : 'legacy'));
-
-        setTxStatus('signing');
-        setTxMsg('Menunggu tanda tangan wallet...');
-        const sig = await sendTx(txToSend);
-
-        setTxStatus('confirming');
-        setTxMsg('Menunggu konfirmasi blockchain...');
-        const { blockhash: bh, lastValidBlockHeight: lvbh } = await activeConn.getLatestBlockhash('confirmed');
-        await activeConn.confirmTransaction({ signature: sig, blockhash: bh, lastValidBlockHeight: lvbh }, 'confirmed');
-
-        setTxSig(sig);
-        setTxStatus('success');
-        setTxMsg('');
-        setAmountA(''); setAmountB('');
-        return;
+        setTxMsg(`Menambahkan likuiditas ke Raydium...`);
+        result = await executeAddLiquidity(selectedDex, { ...config, poolId: pool.poolId });
       } else {
-        setTxMsg('Menyiapkan pool baru (CPMM)...');
-        console.log('[AddLiquidity] creating new pool...');
-        const programId = network === 'devnet'
-          ? DEVNET_PROGRAM_ID.CREATE_CPMM_POOL_PROGRAM
-          : CREATE_CPMM_POOL_PROGRAM;
-        const feeConfig = CPMM_FEE_CONFIGS[feeConfigIndex];
-        const configPda = getCpmmPdaAmmConfigId(programId, feeConfig.index);
-
-        const result = await raydium.cpmm.createPool({
-          programId,
-          poolFeeAccount: CREATE_CPMM_POOL_FEE_ACC,
-          mintA: { address: tokenA.mint, decimals: tokenA.decimals, programId: TOKEN_PROGRAM_ID.toString() },
-          mintB: { address: tokenB.mint, decimals: tokenB.decimals, programId: TOKEN_PROGRAM_ID.toString() },
-          mintAAmount:  bnA,
-          mintBAmount:  bnB,
-          startTime:    new BN(0),
-          feeConfig: {
-            id:              configPda.publicKey.toString(),
-            index:           feeConfig.index,
-            protocolFeeRate: 120000,
-            tradeFeeRate:    feeConfig.tradeFeeRate,
-            fundFeeRate:     40000,
-            createPoolFee:   '150000000',
-            creatorFeeRate:  0,
-          },
-          associatedOnly:      false,
-          ownerInfo:           { useSOLBalance: tokenA.mint === SOL_MINT || tokenB.mint === SOL_MINT },
-          computeBudgetConfig: { units: 600000, microLamports: 100000 },
-        });
-        const txToSend = (result as any).transactions ?? (result as any).transaction;
-        console.log('[AddLiquidity] tx built, type:', Array.isArray(txToSend) ? `array[${txToSend.length}]` : (txToSend instanceof VersionedTransaction ? 'versioned' : 'legacy'));
-
-        setTxStatus('signing');
-        setTxMsg('Menunggu tanda tangan wallet...');
-        const sig = await sendTx(txToSend);
-
-        setTxStatus('confirming');
-        setTxMsg('Menunggu konfirmasi blockchain...');
-        const { blockhash: bh2, lastValidBlockHeight: lvbh2 } = await activeConn.getLatestBlockhash('confirmed');
-        await activeConn.confirmTransaction({ signature: sig, blockhash: bh2, lastValidBlockHeight: lvbh2 }, 'confirmed');
-
-        setTxSig(sig);
-        setTxStatus('success');
-        setTxMsg('');
-        setAmountA(''); setAmountB('');
+        setTxMsg(`Membuat pool baru di Raydium...`);
+        result = await executeCreatePool(selectedDex, config);
       }
 
-    } catch (err) { 
-      handleTxError(err); 
+      setTxSig(result.signature);
+      setTxStatus('success');
+      setTxMsg('');
+      setAmountA('');
+      setAmountB('');
+      showToast('Likuiditas berhasil ditambahkan!', 'success');
+
+      // Lock Liquidity Logic
+      if (lockMonths > 0 && pool) {
+        try {
+          const lockUntilMs = Date.now() + lockMonths * 30 * 24 * 60 * 60 * 1000;
+          // Fetch LP balance yang baru diterima
+          const lpAta = await getAssociatedTokenAddress(
+            new PublicKey(pool.lpMint), publicKey!
+          );
+          const lpInfo = await activeConn.getTokenAccountBalance(lpAta);
+          const lpRaw = BigInt(lpInfo.value.amount);
+          
+          setTxMsg('🔒 Mengunci LP token...');
+          const adapter = DEX_ADAPTERS[selectedDex];
+          if (adapter && adapter.lockLpTokens) {
+            const lockSig = await adapter.lockLpTokens(
+              activeConn, publicKey!, signTransaction!,
+              pool.lpMint, lpRaw, lockUntilMs
+            );
+            setLockInfo({
+              lockedUntil: lockUntilMs,
+              lockTx: lockSig,
+              lpAmount: lpInfo.value.uiAmountString || '0',
+            });
+          }
+          setTxMsg('');
+        } catch (e) {
+          console.error('Lock LP error (non-fatal):', e);
+          // Lock gagal tidak batalkan add liquidity
+        }
+      }
+    } catch (err) {
+      handleTxError(err);
     } finally {
       setIsLoading(false);
     }
-  }, [connected, publicKey, tokenA, tokenB, amountA, amountB, pool, feeConfigIndex, network]);
+  }, [connected, publicKey, signTransaction, tokenA, tokenB, amountA, amountB, pool, feeConfigIndex, network, selectedDex, activeConn, sendTransaction, lockMonths]);
 
   // ─── REMOVE LIQUIDITY ─────────────────────────────────────
   const handleRemoveLiquidity = useCallback(async () => {
-    if (!connected || !publicKey) { setErrorMsg('Hubungkan wallet terlebih dahulu!'); return; }
-    if (!pool?.exists)            { setErrorMsg('Pool tidak ditemukan!'); return; }
-    if (!userPosition)            { setErrorMsg('Kamu tidak punya LP token di pool ini!'); return; }
+    if (!connected || !publicKey || !signTransaction) {
+      setErrorMsg('Hubungkan wallet terlebih dahulu!');
+      return;
+    }
+    
+    const targetPool = pool;
+    const targetPos = userPosition;
 
-    const lpToBurn = (userPosition.lpBalanceRaw * BigInt(removePercent)) / 100n;
+    if (!targetPool || !targetPool.exists) { setErrorMsg('Pool tidak ditemukan!'); return; }
+    if (!targetPos) { setErrorMsg('Kamu tidak punya LP token!'); return; }
+
+    if (lockInfo && lockInfo.lockedUntil > Date.now()) {
+      const unlockDate = new Date(lockInfo.lockedUntil)
+        .toLocaleDateString('id-ID');
+      setErrorMsg(`🔒 LP masih terkunci hingga ${unlockDate}!`);
+      return;
+    }
+
+    const lpToBurn = (targetPos.lpBalanceRaw * BigInt(removePercent)) / 100n;
     if (lpToBurn <= 0n) { setErrorMsg('Jumlah LP token tidak valid!'); return; }
 
     setErrorMsg(''); setTxStatus('building'); setTxSig('');
 
     try {
-      setTxMsg('Menyiapkan transaksi remove liquidity...');
-      const raydium      = await initRaydium(activeConn, publicKey, network);
-      console.log('[RemoveLiquidity] fetching pool info:', pool.poolId);
-      let poolInfoFull;
-      try {
-        poolInfoFull = await raydium.cpmm.getPoolInfoFromRpc(pool.poolId);
-      } catch (rpcErr) {
-        console.warn('[RemoveLiquidity] getPoolInfoFromRpc failed, trying API...', rpcErr);
-        const pools = await raydium.api.fetchPoolById({ ids: pool.poolId });
-        if (!pools || pools.length === 0) throw new Error('Pool tidak ditemukan. Coba refresh halaman.');
-        poolInfoFull = { poolInfo: pools[0] as any, poolKeys: undefined };
-      }
+      setTxMsg(`Menghapus likuiditas dari Raydium...`);
+      
+      const config = {
+        connection: activeConn,
+        publicKey,
+        sendTransaction,
+        signTransaction,
+        tokenAMint: tokenA?.mint || '',
+        tokenBMint: tokenB?.mint || '',
+        tokenADecimals: tokenA?.decimals || 9,
+        tokenBDecimals: tokenB?.decimals || 9,
+        amountA: '0',
+        amountB: '0',
+        feeTierIndex: targetPool.feeConfigIndex || 0,
+        network,
+        poolId: targetPool.poolId || '',
+        lpAmount: lpToBurn.toString()
+      };
 
-      const result = await raydium.cpmm.withdrawLiquidity({
-        poolInfo:            poolInfoFull.poolInfo,
-        poolKeys:            poolInfoFull.poolKeys,
-        lpAmount:            new BN(lpToBurn.toString()),
-        slippage:            new Percent(1, 100),
-        computeBudgetConfig: { units: 400000, microLamports: 100000 },
-      });
-
-      setTxStatus('signing');
-      setTxMsg('Menunggu tanda tangan wallet...');
-      const sig = await sendTx(result.transaction);
-
-      setTxStatus('confirming');
-      setTxMsg('Menunggu konfirmasi blockchain...');
-      const { blockhash, lastValidBlockHeight } = await activeConn.getLatestBlockhash('confirmed');
-      await activeConn.confirmTransaction({ signature: sig, blockhash, lastValidBlockHeight }, 'confirmed');
-
-      setTxSig(sig);
+      const result = await executeRemoveLiquidity(selectedDex, config);
+      setTxSig(result.signature);
       setTxStatus('success');
       setTxMsg('');
-    } catch (err) { handleTxError(err); }
-  }, [connected, publicKey, pool, userPosition, removePercent, network]);
+      showToast('Likuiditas berhasil dicabut!', 'success');
+      // Refresh LP positions after successful remove
+      if (publicKey && connected) {
+        setScanningPools(true);
+        scanWalletLpPools(activeConn, publicKey, network)
+          .then(pools => { setDetectedPools(pools); setSelectedLpPool(pools[0] ?? null); })
+          .finally(() => setScanningPools(false));
+      }
+    } catch (err) { handleTxError(err); showToast('Gagal mencabut likuiditas.', 'error'); }
+  }, [connected, publicKey, signTransaction, pool, userPosition, removePercent, network, selectedDex, activeConn, sendTransaction, tokenA, tokenB, feeConfigIndex, selectedLpPool, lockInfo]);
+
+  // ─── BIDIRECTIONAL LIQUIDITY CALCULATOR ─────────────────────
+  const handleAmountAChange = (val: string) => {
+    setAmountA(val);
+    if (val && !isNaN(parseFloat(val)) && parseFloat(val) > 0) {
+      if (targetPriceUsd && parseFloat(targetPriceUsd) > 0) {
+        try {
+          const sol = new Decimal(val);
+          const priceUsd = new Decimal(targetPriceUsd);
+          const neededToken = sol.mul(solPrice).div(priceUsd);
+          setAmountB(neededToken.toFixed(0));
+        } catch {}
+      } else if (amountB && parseFloat(amountB) > 0) {
+        // Calculate target price based on ratio
+        const price = (parseFloat(val) * solPrice) / parseFloat(amountB);
+        setTargetPriceUsd(price.toFixed(10).replace(/\.?0+$/, ''));
+      }
+    }
+  };
+
+  const handleAmountBChange = (val: string) => {
+    setAmountB(val);
+    if (val && !isNaN(parseFloat(val)) && parseFloat(val) > 0) {
+      if (targetPriceUsd && parseFloat(targetPriceUsd) > 0) {
+        try {
+          const token = new Decimal(val);
+          const priceUsd = new Decimal(targetPriceUsd);
+          const neededSol = token.mul(priceUsd).div(solPrice);
+          setAmountA(neededSol.toFixed(9).replace(/\.?0+$/, ''));
+        } catch {}
+      } else if (amountA && parseFloat(amountA) > 0) {
+        // Calculate target price based on ratio
+        const price = (parseFloat(amountA) * solPrice) / parseFloat(val);
+        setTargetPriceUsd(price.toFixed(10).replace(/\.?0+$/, ''));
+      }
+    }
+  };
+
+  const handleTargetPriceChange = (val: string) => {
+    const cleanVal = val.replace(',', '.');
+    setTargetPriceUsd(cleanVal);
+    if (cleanVal && !isNaN(parseFloat(cleanVal)) && parseFloat(cleanVal) > 0) {
+      if (amountB && parseFloat(amountB) > 0) {
+        try {
+          const tokenBAmount = new Decimal(amountB);
+          const tokenPriceInSol = new Decimal(cleanVal).div(solPrice);
+          const totalSolRequired = tokenBAmount.mul(tokenPriceInSol);
+          setAmountA(totalSolRequired.toFixed(9).replace(/\.?0+$/, ''));
+        } catch {}
+      } else if (amountA && parseFloat(amountA) > 0) {
+        try {
+          const solAmount = new Decimal(amountA);
+          const priceUsd = new Decimal(cleanVal);
+          const neededToken = solAmount.mul(solPrice).div(priceUsd);
+          setAmountB(neededToken.toFixed(0));
+        } catch {}
+      }
+    }
+  };
 
   // ─── RENDER ───────────────────────────────────────────────
   const S = {
-    card:    { background: '#1e1e1e', border: '1px solid #2a2a2a', borderRadius: 12, padding: 18 } as React.CSSProperties,
+    card:    { background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: 12, padding: 16 } as React.CSSProperties,
     label:   { color: '#888', fontSize: 11, textTransform: 'uppercase' as const, letterSpacing: '.06em' },
-    input:   { width: '100%', boxSizing: 'border-box' as const, background: '#111', border: '1px solid #444', color: '#e8e8e8', padding: '10px 12px', borderRadius: 8, fontSize: 12, fontFamily: 'monospace', outline: 'none' },
-    amtInput:{ width: '100%', boxSizing: 'border-box' as const, background: '#0d0d0d', border: '1px solid #444', color: '#e8e8e8', padding: '10px 50px 10px 12px', borderRadius: 8, fontSize: 18, fontFamily: 'monospace', outline: 'none' },
+    input:   { width: '100%', boxSizing: 'border-box' as const, background: '#111', border: '1px solid #333', color: '#e8e8e8', padding: '10px 12px', borderRadius: 8, fontSize: 12, fontFamily: 'monospace', outline: 'none' },
+    amtInput:{ width: '100%', boxSizing: 'border-box' as const, background: '#0d0d0d', border: '1px solid #333', color: '#e8e8e8', padding: '10px 50px 10px 12px', borderRadius: 8, fontSize: 18, fontFamily: 'monospace', outline: 'none' },
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: '#1a1a1a', color: '#e8e8e8', fontFamily: "'Trebuchet MS', Verdana, sans-serif" }}>
+    <div style={{ minHeight: '100vh', background: '#0f0f0f', color: '#e8e8e8', fontFamily: "'Inter', sans-serif" }}>
       <Header onSwapOpen={() => setIsSwapOpen(true)} />
 
-      <div style={{ maxWidth: 900, margin: '0 auto', padding: '100px 20px 60px' }}>
+      <div style={{ maxWidth: 840, margin: '0 auto', padding: '80px 20px 60px' }}>
 
         {/* Title + Network */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div>
-            <h1 style={{ fontSize: 22, fontWeight: 'bold', margin: 0 }}>
-              💧 Liquidity Pool
-              <span style={{ color: '#f5a623', fontSize: 13, marginLeft: 10 }}>
-                ({network === 'devnet' ? 'Devnet' : 'Mainnet'})
-              </span>
+            <h1 style={{ fontSize: 20, fontWeight: 'bold', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ color: '#f5a623' }}>💧</span> Liquidity Pool
+              <span style={{ fontSize: 10, background: '#222', padding: '2px 6px', borderRadius: 4, color: '#666', fontWeight: 'normal' }}>v2.1</span>
             </h1>
-            <p style={{ color: '#555', fontSize: 12, margin: '4px 0 0' }}>CPMM · Powered by Raydium SDK v2</p>
+            <p style={{ color: '#666', fontSize: 12, margin: '2px 0 0' }}>Raydium CPMM Manager • {network.toUpperCase()}</p>
           </div>
           <button
             onClick={() => setNetwork(n => n === 'devnet' ? 'mainnet' : 'devnet')}
-            style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid #444', background: network === 'devnet' ? '#1a2a1a' : '#2a1a0a', color: network === 'devnet' ? '#5cb85c' : '#f5a623', fontSize: 12, cursor: 'pointer', fontWeight: 'bold' }}
+            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #333', background: '#1a1a1a', color: network === 'devnet' ? '#5cb85c' : '#f5a623', fontSize: 11, cursor: 'pointer', fontWeight: 'bold' }}
           >
-            {network === 'devnet' ? '🌿 DEVNET' : '🌐 MAINNET'}
+            {network === 'devnet' ? '● DEVNET' : '● MAINNET'}
           </button>
         </div>
 
-        {/* Tabs */}
-        <div style={{ display: 'flex', gap: 0, marginBottom: 24, background: '#111', borderRadius: 10, padding: 4 }}>
-          {(['add', 'remove'] as PageTab[]).map(t => (
-            <button key={t}
-              onClick={() => { setTab(t); setErrorMsg(''); setTxStatus('idle'); setTxSig(''); }}
-              style={{
-                flex: 1, padding: '10px', borderRadius: 8, border: 'none', cursor: 'pointer',
-                background: tab === t
-                  ? t === 'add' ? 'linear-gradient(135deg,#f5a623,#d4891c)' : 'linear-gradient(135deg,#5b9bd5,#3a7bc8)'
-                  : 'transparent',
-                color: tab === t ? '#1a1a1a' : '#555',
-                fontWeight: 'bold', fontSize: 13, transition: 'all 0.2s',
-              }}
-            >
-              {t === 'add' ? '➕ Add Liquidity' : '➖ Remove Liquidity'}
-            </button>
-          ))}
+        {/* TAB BUTTONS */}
+        <div style={{ display: 'flex', flexDirection: 'row', gap: '12px', marginBottom: '16px', position: 'relative', zIndex: 10 }}>
+          <button
+            onClick={() => { setActiveTab('add'); setErrorMsg(''); setTxStatus('idle'); setTxSig(''); }}
+            style={{
+              backgroundColor: activeTab === 'add' ? '#f59e0b' : 'transparent',
+              color: activeTab === 'add' ? '#000' : '#f59e0b',
+              border: '2px solid #f59e0b',
+              borderRadius: '8px',
+              padding: '8px 20px',
+              fontWeight: '700',
+              fontSize: '14px',
+              cursor: 'pointer',
+              display: 'inline-block',
+              minWidth: '140px'
+            }}
+          >
+            Add Liquidity
+          </button>
+
+          <button
+            onClick={() => { setActiveTab('remove'); setErrorMsg(''); setTxStatus('idle'); setTxSig(''); }}
+            style={{
+              backgroundColor: activeTab === 'remove' ? '#f59e0b' : 'transparent',
+              color: activeTab === 'remove' ? '#000' : '#f59e0b',
+              border: '2px solid #f59e0b',
+              borderRadius: '8px',
+              padding: '8px 20px',
+              fontWeight: '700',
+              fontSize: '14px',
+              cursor: 'pointer',
+              display: 'inline-block',
+              minWidth: '140px'
+            }}
+          >
+            Remove Liquidity
+          </button>
         </div>
 
-        {/* DEX Selector */}
-        {tab === 'add' && (
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontSize: 11, color: '#888', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.06em' }}>
-              Pilih DEX Protocol
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {(Object.values(DEX_ADAPTERS) as any[]).map((adapter) => {
-                const available = adapter.isAvailable(network);
-                return (
-                  <button
-                    key={adapter.name}
-                    onClick={() => available && setSelectedDex(adapter.name)}
-                    disabled={!available}
-                    title={!available ? `${adapter.label} tidak tersedia di ${network}` : adapter.description}
-                    style={{
-                      flex: 1, padding: '10px 8px', borderRadius: 8, cursor: available ? 'pointer' : 'not-allowed',
-                      border: selectedDex === adapter.name ? '1px solid #f5a623' : '1px solid #333',
-                      background: selectedDex === adapter.name ? '#2a1a0a' : '#111',
-                      color: !available ? '#444' : selectedDex === adapter.name ? '#f5a623' : '#888',
-                      fontSize: 11, fontWeight: 'bold', transition: 'all .2s',
-                    }}
-                  >
-                    <div>{adapter.label}</div>
-                    <div style={{ fontSize: 9, fontWeight: 'normal', marginTop: 2 }}>
-                      {available ? adapter.description.split('—')[0] : 'Mainnet only'}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20 }}>
-
-          {/* ── MAIN PANEL ── */}
-          <div>
-
-            {/* Token A */}
-            <div style={{ ...S.card, marginBottom: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                <label style={S.label}>Token A</label>
-                {tokenA && publicKey && <span style={{ color: '#5cb85c', fontSize: 11, fontFamily: 'monospace' }}>Balance: {balanceA} {tokenA.symbol}</span>}
-              </div>
-              <input type="text" value={mintAInput} onChange={e => setMintAInput(e.target.value)}
-                placeholder="Mint address Token A (default: SOL)"
-                style={{ ...S.input, borderColor: errorA ? '#d9534f' : tokenA ? '#5cb85c44' : '#444' }}
-              />
-              {tokenA && !errorA && <div style={{ color: '#5cb85c', fontSize: 11, marginTop: 4 }}>✓ {tokenA.name} ({tokenA.symbol}) · {tokenA.decimals} decimals</div>}
-              {errorA && <div style={{ color: '#d9534f', fontSize: 11, marginTop: 4 }}>⚠ {errorA}</div>}
-              {loadingA && <div style={{ color: '#555', fontSize: 11, marginTop: 4 }}>⟳ Mencari token...</div>}
-              {tab === 'add' && tokenA && (
-                <div style={{ position: 'relative', marginTop: 10 }}>
-                  <input type="number" value={amountA} onChange={e => handleAmountAChange(e.target.value)}
-                    placeholder="0.00" min="0" style={S.amtInput} />
-                  <button onClick={() => setAmountA(balanceA !== '—' ? balanceA : '')}
-                    style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#f5a623', fontSize: 10, cursor: 'pointer', fontWeight: 'bold' }}>
-                    MAX
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Divider */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-              <div style={{ flex: 1, height: 1, background: '#2a2a2a' }} />
-              <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#1a1a1a', border: '1px solid #333', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#444', fontSize: 14 }}>+</div>
-              <div style={{ flex: 1, height: 1, background: '#2a2a2a' }} />
-            </div>
-
-            {/* Token B */}
-            <div style={{ ...S.card, marginBottom: 16 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                <label style={S.label}>Token B — Paste CA</label>
-                {tokenB && publicKey && <span style={{ color: '#5cb85c', fontSize: 11, fontFamily: 'monospace' }}>Balance: {balanceB} {tokenB.symbol}</span>}
-              </div>
-              <div style={{ position: 'relative' }}>
-                <input type="text" value={mintBInput} onChange={e => setMintBInput(e.target.value)}
-                  placeholder="Paste mint address / CA token kamu..."
-                  style={{ ...S.input, borderColor: errorB ? '#d9534f' : tokenB ? '#5cb85c44' : '#444', paddingRight: 60 }}
-                />
-                <button
-                  onClick={async () => { try { setMintBInput((await navigator.clipboard.readText()).trim()); } catch {} }}
-                  style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: '#0a1a2a', border: '1px solid #5b9bd544', color: '#5b9bd5', padding: '3px 8px', borderRadius: 6, cursor: 'pointer', fontSize: 10, fontWeight: 'bold' }}
-                >PASTE</button>
-              </div>
-              {loadingB && <div style={{ color: '#555', fontSize: 11, marginTop: 4 }}>⟳ Mencari token...</div>}
-              {tokenB && !errorB && <div style={{ color: '#5cb85c', fontSize: 11, marginTop: 4 }}>✓ {tokenB.name} ({tokenB.symbol}) · {tokenB.decimals} decimals</div>}
-              {errorB && <div style={{ color: '#d9534f', fontSize: 11, marginTop: 4 }}>⚠ {errorB}</div>}
-              {!mintBInput && (
-                <div style={{ marginTop: 6, padding: '8px 10px', background: '#1a1a0a', border: '1px solid #f5a62322', borderRadius: 6, color: '#777', fontSize: 11 }}>
-                  💡 Buat token di <strong style={{ color: '#f5a623' }}>Create Token</strong>, copy mint address-nya, paste di sini
-                </div>
-              )}
-              {tab === 'add' && tokenB && (
-                <div style={{ position: 'relative', marginTop: 10 }}>
-                  <input type="number" value={amountB} onChange={e => handleAmountBChange(e.target.value)}
-                    placeholder="0.00" min="0" style={S.amtInput} />
-                  <button onClick={() => setAmountB(balanceB !== '—' ? balanceB : '')}
-                    style={{ position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#f5a623', fontSize: 10, cursor: 'pointer', fontWeight: 'bold' }}>
-                    MAX
-                  </button>
-                </div>
-              )}
-
-              {/* Target Harga Awal (Bidirectional Calculator) */}
-              {tab === 'add' && tokenB && (
-                <div style={{ marginTop: 14 }}>
-                  <label style={{ ...S.label, color: '#f59e0b' }}>Target Harga Awal (USD)</label>
-                  <input
-                    type="number"
-                    step="any"
-                    value={targetPriceUsd}
-                    onChange={e => handleTargetPriceChange(e.target.value)}
-                    placeholder="0.00"
-                    style={{ ...S.amtInput, borderColor: '#f59e0b44' }}
-                  />
-                  <div style={{ fontSize: 11, color: '#666', marginTop: 4 }}>
-                    Sistem akan otomatis menghitung balik jumlah SOL / Token B
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 24 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            {activeTab === 'add' ? (
+              <>
+                {/* Token A */}
+                <div style={S.card}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <label style={S.label}>Token A (Base)</label>
+                    {tokenA && publicKey && <span style={{ color: '#5cb85c', fontSize: 11 }}>Balance: {balanceA}</span>}
                   </div>
-                </div>
-              )}
-            </div>
-
-            {/* Pool status */}
-            {tokenA && tokenB && (
-              <div style={{
-                padding: '10px 14px', borderRadius: 8, marginBottom: 14, fontSize: 11,
-                background: checkingPool ? '#111' : pool ? '#0a1a0a' : '#1a1500',
-                border: `1px solid ${checkingPool ? '#333' : pool ? '#5cb85c44' : '#f5a62344'}`,
-                color: checkingPool ? '#555' : pool ? '#5cb85c' : '#f5a623',
-              }}>
-                {checkingPool
-                  ? '⟳ Mengecek pool di Raydium CPMM...'
-                  : pool
-                    ? `✓ Pool ditemukan (${shortAddr(pool.poolId)}) · Fee: ${CPMM_FEE_CONFIGS.find(c => c.index === pool.feeConfigIndex)?.label ?? '—'}`
-                    : '⚡ Pool belum ada → akan membuat pool baru CPMM'}
-              </div>
-            )}
-
-            {/* Fee tier — hanya saat buat pool baru */}
-            {tab === 'add' && tokenA && tokenB && !pool && !checkingPool && (
-              <div style={{ marginBottom: 14 }}>
-                <label style={{ ...S.label, display: 'block', marginBottom: 8 }}>Fee Tier Pool</label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                  {CPMM_FEE_CONFIGS.map(cfg => (
-                    <button key={cfg.index} onClick={() => setFeeConfigIndex(cfg.index)}
-                      style={{
-                        padding: '10px 6px', borderRadius: 8, cursor: 'pointer', textAlign: 'center',
-                        border: `1px solid ${feeConfigIndex === cfg.index ? '#f5a623' : '#333'}`,
-                        background: feeConfigIndex === cfg.index ? '#2a1a00' : '#111',
-                        color: feeConfigIndex === cfg.index ? '#f5a623' : '#666',
-                      }}>
-                      <div style={{ fontSize: 15, fontWeight: 'bold' }}>{cfg.label}</div>
-                      <div style={{ fontSize: 10, marginTop: 2 }}>{cfg.description}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Price preview */}
-            {tab === 'add' && tokenA && tokenB && amountA && amountB && parseFloat(amountA) > 0 && parseFloat(amountB) > 0 && (
-              <div style={{ padding: '8px 14px', background: '#0a0a1a', border: '1px solid #5b9bd522', borderRadius: 8, marginBottom: 14, fontSize: 11 }}>
-                <div style={{ color: '#666', marginBottom: 2 }}>📊 Preview harga initial pool:</div>
-                <span style={{ color: '#5b9bd5', fontFamily: 'monospace' }}>
-                  1 {tokenA.symbol} = {formatSmallPrice(parseFloat(amountB) / parseFloat(amountA))} {tokenB.symbol}
-                </span>
-                {lpPreview && <span style={{ color: '#888', marginLeft: 16 }}>LP diterima: ~{lpPreview} LP</span>}
-              </div>
-            )}
-
-            {/* Remove slider */}
-            {tab === 'remove' && (
-              <div style={{ ...S.card, marginBottom: 16 }}>
-                {userPosition ? (
-                  <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-                      <span style={{ color: '#888', fontSize: 11, textTransform: 'uppercase' }}>LP Token Kamu</span>
-                      <span style={{ color: '#5b9bd5', fontSize: 12, fontFamily: 'monospace', fontWeight: 'bold' }}>{userPosition.lpBalance} LP</span>
+                  <input type="text" value={mintAInput} onChange={e => setMintAInput(e.target.value)}
+                    placeholder="Mint address Token A (default: SOL)"
+                    style={{ ...S.input, marginBottom: 12 }}
+                  />
+                  {tokenA && (
+                    <div style={{ position: 'relative' }}>
+                      <input type="number" value={amountA} onChange={e => handleAmountAChange(e.target.value)}
+                        placeholder="0.00" style={S.amtInput} />
+                      <button onClick={() => setAmountA(balanceA !== '—' ? balanceA : '')}
+                        style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#f5a623', fontSize: 11, cursor: 'pointer', fontWeight: 'bold' }}>
+                        MAX
+                      </button>
                     </div>
-                    <div style={{ color: '#666', fontSize: 11, marginBottom: 14 }}>
-                      Share pool: {userPosition.sharePercent}%
+                  )}
+                </div>
+
+                {/* Token B */}
+                <div style={S.card}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+                    <label style={S.label}>Token B (Quote)</label>
+                    {tokenB && publicKey && <span style={{ color: '#5cb85c', fontSize: 11 }}>Balance: {balanceB}</span>}
+                  </div>
+                  <input type="text" value={mintBInput} onChange={e => setMintBInput(e.target.value)}
+                    placeholder="Paste mint address / CA token..."
+                    style={{ ...S.input, marginBottom: 12 }}
+                  />
+                  {tokenB && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <div style={{ position: 'relative' }}>
+                        <input type="number" value={amountB} onChange={e => handleAmountBChange(e.target.value)}
+                          placeholder="0.00" style={S.amtInput} />
+                        <button onClick={() => setAmountB(balanceB !== '—' ? balanceB : '')}
+                          style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#f5a623', fontSize: 11, cursor: 'pointer', fontWeight: 'bold' }}>
+                          MAX
+                        </button>
+                      </div>
+                      <div>
+                        <label style={{ ...S.label, color: '#f59e0b', display: 'block', marginBottom: 6 }}>Target Price (USD)</label>
+                        <input type="number" step="any" value={targetPriceUsd} onChange={e => handleTargetPriceChange(e.target.value)}
+                          placeholder="0.00" style={S.amtInput} />
+                      </div>
                     </div>
-                    <label style={{ ...S.label, display: 'block', marginBottom: 8 }}>
-                      Remove: <strong style={{ color: '#e8e8e8' }}>{removePercent}%</strong>
+                  )}
+                </div>
+
+                {/* Lock Duration Card - hanya tampil di tab add */}
+                {activeTab === 'add' && (
+                  <div style={S.card}>
+                    <label style={{ ...S.label, display: 'block', marginBottom: 10 }}>
+                      🔒 LOCK LIKUIDITAS
                     </label>
-                    <input type="range" min={1} max={100} value={removePercent}
-                      onChange={e => setRemovePercent(Number(e.target.value))}
-                      style={{ width: '100%', marginBottom: 10, accentColor: '#5b9bd5' }}
-                    />
-                    <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-                      {[25, 50, 75, 100].map(p => (
-                        <button key={p} onClick={() => setRemovePercent(p)}
-                          style={{ flex: 1, padding: '6px', borderRadius: 6, border: `1px solid ${removePercent === p ? '#5b9bd5' : '#333'}`, background: removePercent === p ? '#0a1a2a' : '#111', color: removePercent === p ? '#5b9bd5' : '#555', fontSize: 11, cursor: 'pointer' }}>
-                          {p}%
+                    <div style={{ fontSize: 11, color: '#888', marginBottom: 12 }}>
+                      LP token dikunci di escrow — tidak bisa dicabut sebelum waktu berakhir
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {[
+                        { label: 'Fleksibel', months: 0 },
+                        { label: '1 Bulan',   months: 1 },
+                        { label: '3 Bulan',   months: 3 },
+                        { label: '6 Bulan',   months: 6 },
+                        { label: '1 Tahun',   months: 12 },
+                        { label: '3 Tahun',   months: 36 },
+                        { label: '5 Tahun',   months: 60 },
+                      ].map(opt => (
+                        <button
+                          key={opt.months}
+                          onClick={() => setLockMonths(opt.months)}
+                          style={{
+                            padding: '6px 14px',
+                            borderRadius: 6,
+                            border: lockMonths === opt.months ? 'none' : '1px solid #f59e0b',
+                            background: lockMonths === opt.months ? '#f59e0b' : 'transparent',
+                            color: lockMonths === opt.months ? '#000' : '#f59e0b',
+                            fontSize: 11,
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {opt.label}
                         </button>
                       ))}
                     </div>
-                    {removePreview && (
-                      <div style={{ padding: '10px 12px', background: '#0a1a0a', border: '1px solid #5cb85c22', borderRadius: 8, fontSize: 11 }}>
-                        <div style={{ color: '#666', marginBottom: 4 }}>📤 Estimasi yang diterima:</div>
-                        <div style={{ color: '#5cb85c', fontFamily: 'monospace' }}>
-                          {removePreview.outA} {tokenA?.symbol ?? '—'}
-                          <span style={{ color: '#444', margin: '0 8px' }}>+</span>
-                          {removePreview.outB} {tokenB?.symbol ?? '—'}
-                        </div>
+                    {lockMonths > 0 && (
+                      <div style={{ marginTop: 10, color: '#5cb85c', fontSize: 11 }}>
+                        ✅ LP akan dikunci hingga:{' '}
+                        {new Date(Date.now() + lockMonths * 30 * 24 * 60 * 60 * 1000)
+                          .toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}
                       </div>
                     )}
-                  </>
-                ) : (
-                  <div style={{ textAlign: 'center', color: '#555', padding: '20px 0', fontSize: 13 }}>
-                    {!publicKey ? '🔌 Connect wallet untuk melihat posisi LP kamu'
-                      : !pool ? '⚠ Pilih token pair yang valid terlebih dahulu'
-                      : '💧 Kamu belum punya LP token di pool ini'}
+                    {lockMonths === 0 && (
+                      <div style={{ marginTop: 10, color: '#888', fontSize: 11 }}>
+                        ⚠ Fleksibel — LP dapat dicabut kapan saja
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={S.card}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                    <label style={S.label}>DETECTED LP POSITIONS</label>
+                    <button
+                      onClick={() => {
+                        if (!publicKey || !connected) return;
+                        setScanningPools(true);
+                        setSelectedLpPool(null);
+                        scanWalletLpPools(activeConn, publicKey, network)
+                          .then(pools => { setDetectedPools(pools); if (pools.length > 0) setSelectedLpPool(pools[0]); })
+                          .finally(() => setScanningPools(false));
+                      }}
+                      disabled={scanningPools || !connected}
+                      style={{ background: 'none', border: '1px solid #333', color: '#888', fontSize: 10, padding: '4px 10px', borderRadius: 6, cursor: 'pointer' }}
+                    >
+                      {scanningPools ? '...' : 'Refresh'}
+                    </button>
+                  </div>
+
+                  {/* Skeleton loaders */}
+                  {scanningPools ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {[1, 2].map(i => (
+                        <div key={i} style={{ padding: 12, borderRadius: 8, background: '#111', border: '1px solid #222' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                            <div style={{ width: 120, height: 14, borderRadius: 4, background: '#222', animation: 'pulse 1.5s infinite' }} />
+                            <div style={{ width: 60, height: 14, borderRadius: 4, background: '#222', animation: 'pulse 1.5s infinite' }} />
+                          </div>
+                          <div style={{ width: 160, height: 10, borderRadius: 4, background: '#1a1a1a', animation: 'pulse 1.5s infinite' }} />
+                        </div>
+                      ))}
+                    </div>
+
+                  /* Empty state */
+                  ) : detectedPools.length === 0 ? (
+                    <div style={{ padding: '32px 20px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.3 }}>💧</div>
+                      <div style={{ color: '#888', fontSize: 13, marginBottom: 4 }}>Belum ada posisi likuiditas.</div>
+                      <div style={{ color: '#555', fontSize: 11, marginBottom: 16 }}>Tambah likuiditas untuk memulai.</div>
+                      <button
+                        onClick={() => { setActiveTab('add'); setErrorMsg(''); setTxStatus('idle'); setTxSig(''); }}
+                        style={{ padding: '8px 20px', borderRadius: 8, border: '2px solid #f59e0b', background: 'transparent', color: '#f59e0b', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        Add Liquidity
+                      </button>
+                    </div>
+
+                  /* Pool cards */
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {detectedPools.map(lp => (
+                        <div
+                          key={lp.poolId}
+                          onClick={() => setSelectedLpPool(lp)}
+                          style={{
+                            padding: 12, borderRadius: 8,
+                            background: selectedLpPool?.poolId === lp.poolId ? '#222' : '#111',
+                            border: `1px solid ${selectedLpPool?.poolId === lp.poolId ? '#f59e0b' : '#333'}`,
+                            cursor: 'pointer', transition: 'all 0.15s'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              <span style={{ fontWeight: 'bold', color: '#e8e8e8', fontSize: 13 }}>{lp.poolName}</span>
+                              <span style={{ fontSize: 9, color: '#888', background: '#1a1a1a', border: '1px solid #333', padding: '1px 5px', borderRadius: 4 }}>CPMM</span>
+                            </div>
+                            <span style={{ color: '#5cb85c', fontSize: 12, fontWeight: 'bold' }}>{lp.lpBalance} LP</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <button
+                              onClick={e => { e.stopPropagation(); copyToClipboard(lp.poolId); showToast('Pool ID disalin!', 'info'); }}
+                              style={{ background: 'none', border: 'none', color: '#555', fontSize: 10, cursor: 'pointer', padding: 0, fontFamily: 'monospace' }}
+                            >
+                              {shortAddr(lp.poolId)} ⎘
+                            </button>
+                            <span style={{ color: '#888', fontSize: 10 }}>Share: {lp.sharePercent}%</span>
+                          </div>
+                          {/* Estimated values */}
+                          {lp.lpSupply > 0n && (
+                            <div style={{ display: 'flex', gap: 12, marginTop: 6, fontSize: 10, color: '#666' }}>
+                              <span>{lp.symbolA}: {formatAmount((lp.lpBalanceRaw * lp.reserveA) / lp.lpSupply, lp.decimalsA)}</span>
+                              <span>{lp.symbolB}: {formatAmount((lp.lpBalanceRaw * lp.reserveB) / lp.lpSupply, lp.decimalsB)}</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {selectedLpPool && (
+                  <div style={S.card}>
+                    <label style={{ ...S.label, display: 'block', marginBottom: 10 }}>JUMLAH PENARIKAN</label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        {[25, 50, 75, 100].map(p => (
+                          <button key={p} onClick={() => setRemovePercent(p)}
+                            style={{
+                              flex: 1, padding: '8px', borderRadius: 6, cursor: 'pointer',
+                              border: removePercent === p ? 'none' : '1px solid #f59e0b',
+                              background: removePercent === p ? '#f59e0b' : 'transparent',
+                              color: removePercent === p ? '#000' : '#f59e0b',
+                              fontSize: 11, fontWeight: 'bold'
+                            }}>
+                            {p}%
+                          </button>
+                        ))}
+                      </div>
+
+                      <div style={{ position: 'relative' }}>
+                        <input
+                          type="text"
+                          value={formatAmount((selectedLpPool.lpBalanceRaw * BigInt(removePercent)) / 100n, selectedLpPool.lpDecimals)}
+                          readOnly
+                          style={S.amtInput}
+                        />
+                        <button
+                          onClick={() => setRemovePercent(100)}
+                          style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#f5a623', fontSize: 11, cursor: 'pointer', fontWeight: 'bold' }}
+                        >
+                          MAX
+                        </button>
+                      </div>
+
+                      {removePreview && (
+                        <div style={{ background: '#0d0d0d', padding: '12px', borderRadius: 8, border: '1px solid #222' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span style={{ color: '#888', fontSize: 12 }}>You will receive:</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                            <span>{selectedLpPool.symbolA}</span>
+                            <span style={{ color: '#5cb85c' }}>+{removePreview.outA}</span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                            <span>{selectedLpPool.symbolB}</span>
+                            <span style={{ color: '#5cb85c' }}>+{removePreview.outB}</span>
+                          </div>
+
+                          {feeEarned && (
+                            <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #222' }}>
+                              <div style={{ color: '#f59e0b', fontSize: 11, fontWeight: 'bold', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                📈 ESTIMATED EARNED FEES
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 2 }}>
+                                <span style={{ color: '#888' }}>{selectedLpPool.symbolA}:</span>
+                                <span style={{ color: '#f59e0b' }}>+{feeEarned.tokenA}</span>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                                <span style={{ color: '#888' }}>{selectedLpPool.symbolB}:</span>
+                                <span style={{ color: '#f59e0b' }}>+{feeEarned.tokenB}</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
             )}
 
-            {/* Error / status */}
-            {/* Error message display removed as per request */}
-            {txMsg && !errorMsg && (
-              <div style={{ background: '#0a1a2a', border: '1px solid #5b9bd544', borderRadius: 8, padding: '10px 14px', marginBottom: 12, color: '#5b9bd5', fontSize: 12 }}>
-                ⟳ {txMsg}
-              </div>
-            )}
+            {/* Status & Action */}
+            {errorMsg && <div style={{ color: '#d9534f', fontSize: 12, marginBottom: 12 }}>⚠ {errorMsg}</div>}
+            {txMsg && <div style={{ color: '#5b9bd5', fontSize: 12, marginBottom: 12 }}>⟳ {txMsg}</div>}
 
-            {/* Submit button */}
-            {txStatus !== 'success' && (
-              <button
-                onClick={tab === 'add' ? handleAddLiquidity : handleRemoveLiquidity}
-                disabled={!connected || isTxLoading
-                  || (tab === 'add' && (!tokenA || !tokenB || !amountA || !amountB))
-                  || (tab === 'remove' && (!pool || !userPosition))}
-                style={{
-                  width: '100%', padding: '14px', borderRadius: 10, border: 'none',
-                  fontSize: 15, fontWeight: 'bold', cursor: 'pointer', transition: 'all 0.2s',
-                  background: isTxLoading || !connected ? '#1a1a1a'
-                    : tab === 'add' ? 'linear-gradient(135deg,#f5a623,#d4891c)'
-                    : 'linear-gradient(135deg,#5b9bd5,#3a7bc8)',
-                  color: (isTxLoading || !connected) ? '#444' : '#1a1a1a',
-                  boxShadow: (!isTxLoading && connected)
-                    ? tab === 'add' ? '0 4px 16px rgba(245,166,35,.25)' : '0 4px 16px rgba(91,155,213,.25)'
-                    : 'none',
-                }}
-              >
-                {!connected ? '🔌 Connect Wallet'
-                  : isTxLoading ? `⟳ ${txMsg || 'Memproses...'}`
-                  : tab === 'add'
-                    ? pool ? '💧 Add Liquidity ke Pool' : '🆕 Buat Pool Baru + Add Liquidity'
-                    : `🔴 Remove ${removePercent}% Liquidity`}
-              </button>
-            )}
-
-            {/* Success */}
-            {txStatus === 'success' && txSig && (
-              <div style={{ background: '#0a1a0a', border: '1px solid #5cb85c', borderRadius: 12, padding: 20 }}>
-                <div style={{ fontSize: 17, fontWeight: 'bold', color: '#5cb85c', marginBottom: 8 }}>
-                  {tab === 'add' ? '✅ Liquidity berhasil ditambahkan!' : '✅ Liquidity berhasil di-remove!'}
+            {txStatus !== 'success' ? (
+              activeTab === 'remove' && selectedLpPool ? (
+                /* Two buttons side by side for Remove tab */
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button
+                    onClick={handleRemoveLiquidity}
+                    disabled={!connected || isTxLoading}
+                    style={{
+                      flex: 1, padding: '14px', borderRadius: 12, border: 'none',
+                      fontSize: 14, fontWeight: 'bold', cursor: isTxLoading || !connected ? 'not-allowed' : 'pointer',
+                      background: isTxLoading || !connected ? '#222' : '#d9534f',
+                      color: isTxLoading || !connected ? '#555' : '#fff',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    {!connected ? 'Connect Wallet' : isTxLoading ? 'Processing...' : 'Cabut Liquidity'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!selectedLpPool) return;
+                      setPrefillAddLiquidity({
+                        tokenBMint: selectedLpPool.mintB,
+                        poolId: selectedLpPool.poolId,
+                        poolName: selectedLpPool.poolName,
+                      });
+                      setActiveTab('add');
+                      setErrorMsg('');
+                      setTxStatus('idle');
+                      setTxSig('');
+                    }}
+                    disabled={isTxLoading}
+                    style={{
+                      flex: 1, padding: '14px', borderRadius: 12,
+                      border: '2px solid #f59e0b', background: 'transparent',
+                      fontSize: 14, fontWeight: 'bold', cursor: isTxLoading ? 'not-allowed' : 'pointer',
+                      color: isTxLoading ? '#555' : '#f59e0b',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    Tambah Liquidity
+                  </button>
                 </div>
-                <div style={{ fontFamily: 'monospace', fontSize: 10, color: '#666', wordBreak: 'break-all', background: '#111', padding: 8, borderRadius: 6, marginBottom: 12 }}>
-                  {txSig}
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <a href={`https://explorer.solana.com/tx/${txSig}${explorerSuffix}`} target="_blank" rel="noopener noreferrer"
-                    style={{ flex: 1, textAlign: 'center', padding: '8px', background: '#0a2a0a', border: '1px solid #5cb85c44', borderRadius: 8, color: '#5cb85c', textDecoration: 'none', fontSize: 12 }}>
-                    🔍 Explorer
-                  </a>
-                  <a href={`https://solscan.io/tx/${txSig}${explorerSuffix}`} target="_blank" rel="noopener noreferrer"
-                    style={{ flex: 1, textAlign: 'center', padding: '8px', background: '#0a1a2a', border: '1px solid #5b9bd544', borderRadius: 8, color: '#5b9bd5', textDecoration: 'none', fontSize: 12 }}>
-                    📊 Solscan
-                  </a>
-                </div>
-                <button onClick={() => { setTxStatus('idle'); setTxSig(''); }}
-                  style={{ width: '100%', marginTop: 10, background: 'none', border: 'none', color: '#555', fontSize: 12, cursor: 'pointer' }}>
-                  ← Kembali
+              ) : (
+                <button
+                  onClick={activeTab === 'add' ? handleAddLiquidity : handleRemoveLiquidity}
+                  disabled={!connected || isTxLoading}
+                  style={{
+                    width: '100%', padding: '16px', borderRadius: 12, border: 'none',
+                    fontSize: 16, fontWeight: 'bold', cursor: 'pointer',
+                    background: isTxLoading || !connected ? '#222' : '#f59e0b',
+                    color: isTxLoading || !connected ? '#555' : '#000',
+                    transition: 'all 0.2s',
+                    boxShadow: !isTxLoading && connected ? `0 4px 20px rgba(245,158,11,0.2)` : 'none'
+                  }}
+                >
+                  {!connected ? 'Connect Wallet' : isTxLoading ? 'Processing...' : activeTab === 'add' ? 'Add Liquidity' : 'Remove Liquidity'}
                 </button>
+              )
+            ) : (
+              <div style={{ background: '#0a1a0a', border: '1px solid #5cb85c', borderRadius: 12, padding: 20, textAlign: 'center' }}>
+                <div style={{ color: '#5cb85c', fontWeight: 'bold', marginBottom: 10 }}>✅ Transaksi Berhasil!</div>
+                <a href={`https://explorer.solana.com/tx/${txSig}${explorerSuffix}`} target="_blank" rel="noopener noreferrer" style={{ color: '#5b9bd5', fontSize: 12 }}>Lihat di Explorer</a>
+                
+                {lockInfo && (
+                  <div style={{ marginTop: 12, padding: 10, background: '#0a1a0a',
+                    border: '1px solid #5cb85c', borderRadius: 8 }}>
+                    <div style={{ color: '#5cb85c', fontSize: 11, fontWeight: 'bold' }}>
+                      🔒 LP Dikunci
+                    </div>
+                    <div style={{ color: '#888', fontSize: 10, marginTop: 4 }}>
+                      Unlock: {new Date(lockInfo.lockedUntil)
+                        .toLocaleDateString('id-ID', {
+                          day: 'numeric', month: 'long', year: 'numeric'
+                        })}
+                    </div>
+                    <a href={`https://explorer.solana.com/tx/${lockInfo.lockTx}?cluster=devnet`}
+                      target="_blank" style={{ color: '#5b9bd5', fontSize: 10 }}>
+                      Lihat Lock TX
+                    </a>
+                  </div>
+                )}
+
+                <button onClick={() => setTxStatus('idle')} style={{ display: 'block', width: '100%', marginTop: 10, background: 'none', border: 'none', color: '#555', cursor: 'pointer' }}>Kembali</button>
               </div>
             )}
           </div>
 
-          {/* ── SIDEBAR ── */}
+          {/* Sidebar */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-
-            {/* Pool Stats */}
-            {pool && tokenA && tokenB && (
-              <div style={{ background: '#1a2a1a', border: '1px solid #5cb85c22', borderRadius: 12, padding: 16 }}>
-                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 10, color: '#5cb85c' }}>📊 Pool Stats</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11 }}>
-                  <div style={{ color: '#666' }}>Reserve {tokenA.symbol}</div>
-                  <div style={{ color: '#e8e8e8', textAlign: 'right', fontFamily: 'monospace' }}>{formatAmount(pool.reserveA, tokenA.decimals)}</div>
-                  <div style={{ color: '#666' }}>Reserve {tokenB.symbol}</div>
-                  <div style={{ color: '#e8e8e8', textAlign: 'right', fontFamily: 'monospace' }}>{formatAmount(pool.reserveB, tokenB.decimals)}</div>
-                  <div style={{ color: '#666' }}>Trade Fee</div>
-                  <div style={{ color: '#f5a623', textAlign: 'right' }}>{CPMM_FEE_CONFIGS.find(c => c.index === pool.feeConfigIndex)?.label ?? '—'}</div>
-                  <div style={{ color: '#666' }}>LP Supply</div>
-                  <div style={{ color: '#e8e8e8', textAlign: 'right', fontFamily: 'monospace', fontSize: 10 }}>{formatAmount(pool.lpSupply, pool.lpDecimals)}</div>
-                </div>
+            <div style={{ ...S.card, fontSize: 11 }}>
+              <div style={{ fontWeight: 'bold', marginBottom: 8 }}>ℹ Info DEX</div>
+              <div style={{ color: '#888', lineHeight: 1.6 }}>
+                <strong>Raydium:</strong> Standar AMM, biaya rendah. Cocok untuk token baru dan likuiditas luas.
               </div>
-            )}
-
-            {/* User Position */}
-            {userPosition && tokenA && tokenB && (
-              <div style={{ background: '#1a1a2a', border: '1px solid #5b9bd533', borderRadius: 12, padding: 16 }}>
-                <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 10, color: '#5b9bd5' }}>👤 Posisi Kamu</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11 }}>
-                  <div style={{ color: '#666' }}>LP Token</div>
-                  <div style={{ color: '#e8e8e8', textAlign: 'right', fontFamily: 'monospace' }}>{userPosition.lpBalance}</div>
-                  <div style={{ color: '#666' }}>Pool Share</div>
-                  <div style={{ color: '#f5a623', textAlign: 'right' }}>{userPosition.sharePercent}%</div>
-                  <div style={{ color: '#666' }}>{tokenA.symbol} (est.)</div>
-                  <div style={{ color: '#5cb85c', textAlign: 'right', fontFamily: 'monospace' }}>{userPosition.valueA}</div>
-                  <div style={{ color: '#666' }}>{tokenB.symbol} (est.)</div>
-                  <div style={{ color: '#5cb85c', textAlign: 'right', fontFamily: 'monospace' }}>{userPosition.valueB}</div>
-                </div>
+            </div>
+            <div style={{ ...S.card, fontSize: 11, borderColor: userPosition ? '#5b9bd544' : '#2a2a2a' }}>
+              <div style={{ fontWeight: 'bold', color: userPosition ? '#5b9bd5' : '#888', marginBottom: 12 }}>
+                👤 Posisi Likuiditas Kamu
               </div>
-            )}
+              {!userPosition ? (
+                <div style={{ color: '#555', fontSize: 10 }}>Masukkan Token B untuk melihat posisi kamu</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>LP Balance:</span>
+                    <span style={{ color: '#5b9bd5' }}>{userPosition.lpBalance}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Share:</span>
+                    <span style={{ color: '#5b9bd5' }}>{userPosition.sharePercent}%</span>
+                  </div>
+                  <div style={{ height: '1px', background: '#333', margin: '4px 0' }} />
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Value {tokenA?.symbol}:</span>
+                    <span>{userPosition.valueA}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Value {tokenB?.symbol}:</span>
+                    <span>{userPosition.valueB}</span>
+                  </div>
 
-            {/* How To */}
-            <div style={{ background: '#1a1a1a', border: '1px solid #2a2a2a', borderRadius: 12, padding: 16 }}>
-              <div style={{ fontWeight: 'bold', fontSize: 12, marginBottom: 8, color: '#888' }}>ℹ Cara Penggunaan</div>
-              <ol style={{ color: '#666', fontSize: 11, paddingLeft: 16, margin: 0, lineHeight: 2 }}>
-                <li>Buat token di <strong style={{ color: '#f5a623' }}>Create Token</strong></li>
-                <li>Copy mint address token</li>
-                <li>Paste di kolom <strong style={{ color: '#e8e8e8' }}>Token B</strong></li>
-                <li>Set jumlah SOL + token</li>
-                <li>Pilih fee tier (0.25% default)</li>
-                <li>Klik <strong style={{ color: '#f5a623' }}>Buat Pool + Add Liquidity</strong></li>
-              </ol>
-            </div>
+                  {feeEarned && (
+                    <>
+                      <div style={{ height: '1px', background: '#333', margin: '4px 0' }} />
+                      <div style={{ color: '#f59e0b', fontSize: 10, fontWeight: 'bold', marginBottom: 4 }}>
+                        📈 Estimasi Fee Earned
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Fee {tokenA?.symbol}:</span>
+                        <span style={{ color: '#5cb85c' }}>+{feeEarned.tokenA}</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Fee {tokenB?.symbol}:</span>
+                        <span style={{ color: '#5cb85c' }}>+{feeEarned.tokenB}</span>
+                      </div>
+                      <div style={{ color: '#555', fontSize: 9, marginTop: 4 }}>
+                        * Estimasi berdasarkan pool fee rate ({pool ? pool.tradeFeeRate / 10000 : 0}%)
+                      </div>
+                    </>
+                  )}
 
-            {/* Risk */}
-            <div style={{ background: '#2a1500', border: '1px solid #d2992222', borderRadius: 12, padding: 16 }}>
-              <div style={{ color: '#d29922', fontSize: 11, fontWeight: 'bold', marginBottom: 8 }}>⚠ Risk</div>
-              <ul style={{ color: '#666', fontSize: 10, paddingLeft: 14, margin: 0, lineHeight: 1.9 }}>
-                <li><strong style={{ color: '#e8e8e8' }}>Impermanent Loss</strong> — nilai LP bisa lebih kecil dari hold</li>
-                <li>Pool baru butuh <strong style={{ color: '#f5a623' }}>~0.2–0.4 SOL</strong> untuk rent</li>
-                <li>Initial price ditentukan oleh rasio kamu</li>
-                <li>Test Devnet dulu sebelum Mainnet</li>
-              </ul>
-            </div>
-
-            {/* Links */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <a href="https://faucet.solana.com" target="_blank" rel="noopener noreferrer"
-                style={{ padding: '8px', background: '#111', border: '1px solid #2a2a2a', borderRadius: 8, color: '#555', textDecoration: 'none', fontSize: 10, textAlign: 'center' }}>
-                🚿 Solana Devnet Faucet ↗
-              </a>
-              <a href="https://docs.raydium.io" target="_blank" rel="noopener noreferrer"
-                style={{ padding: '8px', background: '#111', border: '1px solid #2a2a2a', borderRadius: 8, color: '#555', textDecoration: 'none', fontSize: 10, textAlign: 'center' }}>
-                📖 Raydium Docs ↗
-              </a>
+                  <button
+                    onClick={() => setActiveTab('remove')}
+                    style={{ marginTop: 8, padding: '8px', borderRadius: 6, border: 'none', background: '#5b9bd5', color: '#1a1a1a', fontWeight: 'bold', cursor: 'pointer' }}
+                  >
+                    🔴 Cabut Liquidity
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </div>
-
       {isSwapOpen && <SwapModal token={null} onClose={() => setIsSwapOpen(false)} />}
+
+      {/* Toast notification */}
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+          padding: '12px 18px', borderRadius: 10, fontSize: 13, fontWeight: 'bold',
+          background: toast.type === 'success' ? '#0a1a0a' : toast.type === 'error' ? '#1a0a0a' : '#0a0a1a',
+          border: `1px solid ${toast.type === 'success' ? '#5cb85c' : toast.type === 'error' ? '#d9534f' : '#5b9bd5'}`,
+          color: toast.type === 'success' ? '#5cb85c' : toast.type === 'error' ? '#d9534f' : '#5b9bd5',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.4)',
+          maxWidth: 320,
+        }}>
+          {toast.type === 'success' ? '✓ ' : toast.type === 'error' ? '✕ ' : 'i '}{toast.msg}
+        </div>
+      )}
+
+      {/* Pulse animation for skeleton */}
+      <style>{`
+        @keyframes pulse {
+          0%, 100% { opacity: 0.4; }
+          50% { opacity: 0.8; }
+        }
+      `}</style>
     </div>
   );
 }

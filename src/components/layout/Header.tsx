@@ -20,11 +20,12 @@ interface HeaderProps {
 
 const navItems = [
   { label: 'Scanner', href: '/', exact: true },
-  { label: '🪙 Create Token', href: '/create-token', exact: false },
-  { label: '💧 Liquidity', href: '/liquidity', exact: false },
+  { label: 'Create Token', href: '/create-token', exact: false },
+  { label: 'Liquidity', href: '/liquidity', exact: false },
+  { label: 'Burn LP', href: '/burn-liquidity', exact: false },
 ];
 
-const presets = ['gem', 'safe', 'degen', 'custom'];
+const presets = ['gem', 'safe', 'degen', 'narrative', 'custom'];
 
 export const Header: React.FC<HeaderProps> = ({
   scanMode,
@@ -115,9 +116,10 @@ export const Header: React.FC<HeaderProps> = ({
                   style={{ fontSize:11 }}
                 >
                   {p === 'gem' && 'Gem'}
-                  {p === 'safe' && '■ Safe'}
-                  {p === 'degen' && '▲ Degen'}
-                   {p === 'custom' && 'Custom'}
+                  {p === 'safe' && 'Safe'}
+                  {p === 'degen' && 'Degen'}
+                  {p === 'narrative' && 'Narrative'}
+                  {p === 'custom' && 'Custom'}
                 </button>
               ))}
             </div>

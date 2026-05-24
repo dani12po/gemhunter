@@ -20,9 +20,10 @@ interface TokenScannerProps {
   stats: { total: number; gems: number; mid: number; boosted: number; new: number };
   onExport: () => void;
   onRefresh: () => void;
+  preset?: string;
 }
 
-const labelMap: Record<keyof FilterData, string> = {
+const labelMap: Partial<Record<keyof FilterData, string>> = {
   'liquidityMin': 'Liq min ($)',
   'volumeMin':    'Vol min ($)',
   'ageMaxJam':    'Umur maks (j)',
@@ -32,6 +33,43 @@ const labelMap: Record<keyof FilterData, string> = {
   'liqMax':       'Liq maks ($)',
 };
 
+// Deteksi narrative berdasarkan nama/simbol token
+function detectNarrative(token: TokenData): string {
+  const name = token.nama?.toLowerCase() || '';
+  const symbol = token.simbol?.toLowerCase() || '';
+  if (name.includes('ai') || name.includes('agent') || symbol.includes('ai')) return 'AI Agent';
+  if (name.includes('cat') || name.includes('dog') || name.includes('pepe') || name.includes('meme') || name.includes('frog')) return 'Meme Coin';
+  if (name.includes('depin') || name.includes('network') || name.includes('node')) return 'DePIN';
+  if (name.includes('real') || name.includes('asset') || symbol.includes('rwa')) return 'RWA';
+  if (name.includes('game') || name.includes('play') || name.includes('p2e')) return 'Gaming';
+  if (name.includes('defi') || name.includes('swap') || name.includes('yield')) return 'DeFi';
+  if (name.includes('social') || name.includes('friend')) return 'Social';
+  if (name.includes('layer') || name.includes('l2') || name.includes('rollup')) return 'Layer 2';
+  if (name.includes('launch') || name.includes('presale') || name.includes('seed')) return 'Launchpad';
+  return 'New Token';
+}
+
+function getTrendingNarrative(tokenList: TokenData[]): string {
+  const counts: Record<string, number> = {};
+  tokenList.forEach(t => {
+    const n = detectNarrative(t);
+    counts[n] = (counts[n] || 0) + 1;
+  });
+  return Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'New Token';
+}
+
+function getUniqueNarratives(tokenList: TokenData[]): { narrative: string; count: number }[] {
+  const counts: Record<string, number> = {};
+  tokenList.forEach(t => {
+    const n = detectNarrative(t);
+    counts[n] = (counts[n] || 0) + 1;
+  });
+  const sorted = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([narrative, count]) => ({ narrative, count }));
+  return [{ narrative: 'all', count: tokenList.length }, ...sorted];
+}
+
 // FIX BUG #4: Header baru tingginya 48px (top) + ~38px (controls) = 86px.
 // Gunakan paddingTop: 96px agar ada sedikit margin.
 const HEADER_HEIGHT = 96;
@@ -39,9 +77,10 @@ const HEADER_HEIGHT = 96;
 export const TokenScanner: React.FC<TokenScannerProps> = ({
   tokens, loading, error, searchQuery, onSearchChange,
   filter, onFilterChange, onSwapOpen, swapToken, onSwapClose,
-  stats, onExport, onRefresh,
+  stats, onExport, onRefresh, preset,
 }) => {
   const [currentPage, setCurrentPage] = React.useState(1);
+  const [selectedNarrative, setSelectedNarrative] = React.useState<string>('all');
   const tokensPerPage = 21;
   const totalPages    = Math.ceil(tokens.length / tokensPerPage);
 
@@ -55,11 +94,11 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
   };
 
   const statItems = [
-    { label: 'Total',       value: stats.total,   color: '#e8e8e8', accent: '#555' },
-     { label: 'Gems',      value: stats.gems,    color: '#f5a623', accent: '#f5a623' },
-    { label: 'Mid',         value: stats.mid,     color: '#e8e8e8', accent: '#555' },
-    { label: '▲ Boosted',   value: stats.boosted, color: '#5cb85c', accent: '#5cb85c' },
-    { label: 'New (1h)',    value: stats.new,     color: '#5b9bd5', accent: '#5b9bd5' },
+    { label: 'Total',     value: stats.total,   color: '#e8e8e8', accent: '#555' },
+    { label: 'Gems',      value: stats.gems,    color: '#f5a623', accent: '#f5a623' },
+    { label: 'Mid',       value: stats.mid,     color: '#e8e8e8', accent: '#555' },
+    { label: 'Boosted',   value: stats.boosted, color: '#5cb85c', accent: '#5cb85c' },
+    { label: 'New (1h)',  value: stats.new,     color: '#5b9bd5', accent: '#5b9bd5' },
   ];
 
   return (
@@ -123,7 +162,7 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
                 fontFamily: 'Trebuchet MS, Verdana, sans-serif',
               }}
             />
-            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#555', fontSize: 14 }}>🔎</span>
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#555', fontSize: 12 }}>S</span>
           </div>
           <button
             onClick={onExport}
@@ -134,7 +173,7 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
               fontSize: 12, fontWeight: 'bold', cursor: 'pointer',
               display: 'flex', alignItems: 'center', gap: 6,
             }}
-          >📊 Export</button>
+          >Export</button>
           <button
             onClick={onRefresh}
             style={{
@@ -169,8 +208,37 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
         padding: '12px 14px',
         marginBottom: 16,
       }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, borderBottom: '1px solid #2a2a2a', paddingBottom: 8 }}>
+          <div style={{ color: '#777', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em' }}>
+            Anti-Rug Risk Filter
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {(['ALL', 'LOW', 'MEDIUM', 'HIGH'] as const).map((level) => (
+              <button
+                key={level}
+                onClick={() => onFilterChange({ ...filter, riskLevel: level })}
+                style={{
+                  background: filter.riskLevel === level ? '#333' : '#1a1a1a',
+                  border: `1px solid ${filter.riskLevel === level ? '#555' : '#333'}`,
+                  color: filter.riskLevel === level 
+                    ? (level === 'HIGH' ? '#ef4444' : level === 'MEDIUM' ? '#f59e0b' : level === 'LOW' ? '#22c55e' : '#fff')
+                    : '#777',
+                  padding: '4px 10px',
+                  fontSize: 10,
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  borderRadius: 2,
+                  transition: 'all 0.2s'
+                }}
+              >
+                {level === 'ALL' ? 'SEMUA' : level}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div style={{ color: '#777', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>
-          Quick Filters
+          Numeric Filters
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 8 }}>
           {(Object.entries(labelMap) as [keyof FilterData, string][]).map(([key, label]) => (
@@ -180,7 +248,7 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
               </div>
               <input
                 type="number"
-                value={filter[key]}
+                value={filter[key] as number}
                 onChange={e => updateFilter(key, parseFloat(e.target.value) || 0)}
                 style={{
                   width: '100%',
@@ -197,6 +265,79 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
           ))}
         </div>
       </div>
+
+      {/* ── Narrative Panel (hanya tampil saat preset 'narrative') ── */}
+      {preset === 'narrative' && tokens.length > 0 && (
+        <div style={{
+          background: '#1e1e1e',
+          border: '1px solid #3a3a3a',
+          borderTop: '2px solid #f5a623',
+          padding: '12px 14px',
+          marginBottom: 16,
+        }}>
+          <div style={{ color: '#777', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 10 }}>
+            Narrative Detection
+          </div>
+
+          {/* Trending Narrative */}
+          <div style={{
+            background: '#2a1a0a', border: '1px solid #f5a623', borderRadius: 8,
+            padding: '8px 12px', marginBottom: 12,
+            display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          }}>
+            <span style={{ color: '#f5a623', fontSize: 12, fontWeight: 'bold' }}>Trending:</span>
+            <span style={{ color: '#e8e8e8', fontSize: 13, fontFamily: 'monospace' }}>
+              {getTrendingNarrative(tokens)}
+            </span>
+            <span style={{ color: '#666', fontSize: 10 }}>
+              {tokens.filter(t => detectNarrative(t) === getTrendingNarrative(tokens)).length} tokens
+            </span>
+          </div>
+
+          {/* Filter by Narrative Buttons */}
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ color: '#666', fontSize: 10, marginBottom: 8 }}>Filter by Narrative:</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {getUniqueNarratives(tokens).map(({ narrative, count }) => (
+                <button
+                  key={narrative}
+                  onClick={() => { setSelectedNarrative(narrative); setCurrentPage(1); }}
+                  style={{
+                    background: selectedNarrative === narrative ? '#f5a623' : '#2a2a2a',
+                    border: `1px solid ${selectedNarrative === narrative ? '#f5a623' : '#444'}`,
+                    color: selectedNarrative === narrative ? '#1a1a1a' : '#e8e8e8',
+                    padding: '4px 12px', borderRadius: 20,
+                    fontSize: 11, fontWeight: 'bold', cursor: 'pointer',
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                  }}
+                >
+                  {narrative === 'all' ? 'All' : narrative}
+                  <span style={{
+                    background: selectedNarrative === narrative ? '#1a1a1a' : '#444',
+                    color: selectedNarrative === narrative ? '#f5a623' : '#aaa',
+                    borderRadius: 10, padding: '1px 6px', fontSize: 9,
+                  }}>{count}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* New Born Alert */}
+          <div style={{
+            background: '#0a2a1a', border: '1px solid #22c55e44',
+            borderRadius: 6, padding: '8px 12px',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span style={{ fontSize: 16, color: '#22c55e' }}>[!]</span>
+            <div>
+              <span style={{ color: '#22c55e', fontSize: 11, fontWeight: 'bold' }}>NEW BORN DETECTED!</span>
+              <span style={{ color: '#888', fontSize: 10, marginLeft: 8 }}>
+                {tokens.filter(t => t.ageHours < 1).length} tokens launched in last hour
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Result summary ── */}
       {!loading && tokens.length > 0 && (
@@ -223,7 +364,7 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
           textAlign: 'center', padding: '60px 20px',
           background: '#1e1e1e', border: '1px dashed #3a3a3a',
         }}>
-            <div style={{ fontSize: 40, marginBottom: 16, opacity: 0.3 }}>●</div>
+          <div style={{ width: 40, height: 40, borderRadius: '50%', background: '#2a2a2a', margin: '0 auto 16px', opacity: 0.4 }} />
           <h3 style={{ color: '#888', fontSize: 14, fontWeight: 'bold', marginBottom: 6 }}>Tidak ada gem ditemukan</h3>
           <p style={{ color: '#555', fontSize: 12 }}>Coba longgarkan filter atau ganti scan mode.</p>
         </div>
@@ -233,7 +374,10 @@ export const TokenScanner: React.FC<TokenScannerProps> = ({
       {!loading && tokens.length > 0 && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 24 }}>
-            {tokens
+            {(preset === 'narrative' && selectedNarrative !== 'all'
+              ? tokens.filter(t => detectNarrative(t) === selectedNarrative)
+              : tokens
+            )
               .slice((currentPage - 1) * tokensPerPage, currentPage * tokensPerPage)
               .map(token => (
                 <TokenCard key={token.address} token={token} onSwap={() => onSwapOpen(token)} />

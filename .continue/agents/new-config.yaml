@@ -1,0 +1,20 @@
+{
+  "models": [
+    {
+      "title": "Agent Router Default",
+      "provider": "openai",
+      "model": "agentrouter-default",
+      "apiBase": "https://agentrouter.org",
+      "apiKey": "sk-pi7dV0x9FREScq1a1RDGrqxRxteWZRSenr6F2UuXbSNNlCyN",
+      "requestOptions": {
+        "timeout": 60000
+      }
+    }
+  ],
+  "slashCommands": [
+    {
+      "name": "share",
+      "description": "Share this session"
+    }
+  ]
+}

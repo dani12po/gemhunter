@@ -302,7 +302,7 @@ export const TokenSelectorModal: React.FC<TokenSelectorModalProps> = ({
 
           <div style={{ padding: '12px 16px', margin: '8px 12px', background: '#111', borderRadius: 8, border: '1px solid #2a2a2a' }}>
             <div style={{ color: '#666', fontSize: 11 }}>
-              💡 Mendukung token dari semua DEX (Raydium, Orca, Meteora, dll via Jupiter). Paste <strong style={{ color: '#f5a623' }}>mint address</strong> untuk token apapun.
+              💡 Mendukung token dari semua DEX (Raydium, dll via Jupiter). Paste <strong style={{ color: '#f5a623' }}>mint address</strong> untuk token apapun.
             </div>
           </div>
         </div>

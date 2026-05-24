@@ -1,27 +1,42 @@
 export { raydiumAdapter } from './raydium';
-export { meteoraAdapter } from './meteora';
-export { orcaAdapter    } from './orca';
 export type { DexProvider, PoolConfig, DexResult, DexAdapter } from './types';
 
 import { raydiumAdapter } from './raydium';
-import { meteoraAdapter } from './meteora';
-import { orcaAdapter    } from './orca';
 import type { DexProvider, PoolConfig, DexResult } from './types';
 
 export const DEX_ADAPTERS = {
   raydium: raydiumAdapter,
-  meteora: meteoraAdapter,
-  orca:    orcaAdapter,
 };
 
 export async function executeCreatePool(
   dex: DexProvider,
   config: PoolConfig
 ): Promise<DexResult> {
-  const adapter = DEX_ADAPTERS[dex];
+  const adapter = DEX_ADAPTERS[dex as keyof typeof DEX_ADAPTERS];
   if (!adapter) throw new Error(`DEX "${dex}" tidak didukung`);
   if (!adapter.isAvailable(config.network)) {
     throw new Error(`${adapter.label} tidak tersedia di ${config.network}`);
   }
   return adapter.createPool(config);
+}
+
+export async function executeAddLiquidity(
+  dex: DexProvider,
+  config: PoolConfig & { poolId: string }
+): Promise<DexResult> {
+  const adapter = DEX_ADAPTERS[dex as keyof typeof DEX_ADAPTERS];
+  if (!adapter) throw new Error(`DEX "${dex}" tidak didukung`);
+  return adapter.addLiquidity(config);
+}
+
+export async function executeRemoveLiquidity(
+  dex: DexProvider,
+  config: PoolConfig & { poolId: string; lpAmount: string }
+): Promise<DexResult> {
+  const adapter = DEX_ADAPTERS[dex as keyof typeof DEX_ADAPTERS];
+  if (!adapter) throw new Error(`DEX "${dex}" tidak didukung`);
+  if (!adapter.removeLiquidity) {
+    throw new Error(`Fitur hapus likuiditas belum tersedia untuk ${adapter.label}`);
+  }
+  return adapter.removeLiquidity(config);
 }

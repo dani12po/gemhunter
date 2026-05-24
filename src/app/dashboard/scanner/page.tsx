@@ -57,6 +57,7 @@ export default function ScannerPage() {
         stats={stats}
         onExport={exportCSV}
         onRefresh={scanToken}
+        preset={preset}
       />
     </ErrorBoundary>
   );

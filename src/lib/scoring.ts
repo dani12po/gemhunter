@@ -90,11 +90,11 @@ export function hitungGemScore(token: TokenData): string {
   if (token.txCount24h > 0 && token.buys24h / token.txCount24h > 0.65) poin += 2;
   if (token.isBoosted) poin += 2;
 
-  if (poin >= 14) return '💎💎💎 ULTRA GEM';
-  if (poin >= 10) return '💎💎 GEM';
-  if (poin >= 7) return '💎 Potential';
-  if (poin >= 4) return '🟡 Watch';
-  return '⚪ Normal';
+  if (poin >= 14) return 'ULTRA GEM';
+  if (poin >= 10) return 'GEM';
+  if (poin >= 7) return 'POTENTIAL';
+  if (poin >= 4) return 'WATCH';
+  return 'NORMAL';
 }
 
 /**

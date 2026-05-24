@@ -31,6 +31,17 @@ export interface TokenData {
   skor: number;
   gemScore: string;
   redFlags: string[];
+  risk?: {
+    score: 'HIGH' | 'MEDIUM' | 'LOW';
+    flags: string[];
+    details: {
+      mintAuthorityRevoked: boolean;
+      freezeAuthorityRevoked: boolean;
+      top10HolderPercent: number;
+      liquidityUsd: number;
+      poolAgeDays: number;
+    }
+  };
 }
 
 // Scanner filter
@@ -42,6 +53,7 @@ export interface FilterData {
   txnMin: number;
   mcapMax: number;
   liqMax: number;
+  riskLevel: 'ALL' | 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 // Preset filters
@@ -53,6 +65,7 @@ export interface PresetData {
   txnMin: number;
   mcapMax: number;
   liqMax: number;
+  riskLevel?: 'ALL' | 'LOW' | 'MEDIUM' | 'HIGH';
 }
 
 // Swap transaction

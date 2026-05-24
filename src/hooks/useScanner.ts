@@ -1,10 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useConnection } from '@solana/wallet-adapter-react';
 import type { TokenData, FilterData } from '../lib/types';
 import { hitungSkor, hitungGemScore, deteksiRedFlag } from '../lib/scoring';
+import { analyzeTokenRisk } from '../lib/scanner/riskAnalyzer';
 import { formatAngka, formatHarga } from '../lib/format';
 import { PRESETS, API_LATEST_PROFILES, API_BOOSTED_LATEST, API_TOKEN_PAIRS } from '../lib/constants';
 
 export function useScanner() {
+  const { connection } = useConnection();
   const [tokens, setTokens] = useState<TokenData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -15,6 +18,22 @@ export function useScanner() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const snapshotRef = useRef<Record<string, { liquidity: number; volume24h: number; harga: number }>>({});
   const tokensRef = useRef<TokenData[]>([]);
+
+  // Deteksi narrative berdasarkan nama/simbol token
+  const detectNarrative = (token: TokenData): string => {
+    const name = token.nama?.toLowerCase() || '';
+    const symbol = token.simbol?.toLowerCase() || '';
+    if (name.includes('ai') || name.includes('agent') || symbol.includes('ai')) return 'AI Agent';
+    if (name.includes('cat') || name.includes('dog') || name.includes('pepe') || name.includes('meme') || name.includes('frog')) return 'Meme Coin';
+    if (name.includes('depin') || name.includes('network') || name.includes('node')) return 'DePIN';
+    if (name.includes('real') || name.includes('asset') || symbol.includes('rwa')) return 'RWA';
+    if (name.includes('game') || name.includes('play') || name.includes('p2e')) return 'Gaming';
+    if (name.includes('defi') || name.includes('swap') || name.includes('yield')) return 'DeFi';
+    if (name.includes('social') || name.includes('friend')) return 'Social';
+    if (name.includes('layer') || name.includes('l2') || name.includes('rollup')) return 'Layer 2';
+    if (name.includes('launch') || name.includes('presale') || name.includes('seed')) return 'Launchpad';
+    return 'New Token';
+  };
 
   // Load persisted state on mount
   useEffect(() => {
@@ -126,6 +145,13 @@ export function useScanner() {
       const snap = snapshotRef.current[token.address] || null;
       token.redFlags = deteksiRedFlag(token, snap);
 
+      // Anti-rug analysis
+      try {
+        token.risk = await analyzeTokenRisk(connection, token.address, token);
+      } catch (e) {
+        console.error('Risk analysis failed for', token.address, e);
+      }
+
       return token;
     } catch {
       return null;
@@ -177,7 +203,7 @@ export function useScanner() {
         tokensList.forEach(newToken => {
           const exists = tokensRef.current.find(t => t.address === newToken.address);
           if (!exists && newToken.skor >= 80) {
-            new Notification(`💎 Gem Baru: ${newToken.nama}`, {
+            new Notification(`Gem Baru: ${newToken.nama}`, {
               body: `Score: ${newToken.skor} | Liq: ${formatAngka(newToken.liquidity)}`,
               icon: newToken.imageUrl || '/favicon.ico'
             });
@@ -235,6 +261,12 @@ export function useScanner() {
     const cari = searchQuery.toLowerCase().trim();
     return tokenList.filter((t) => {
       if (cari && !t.nama.toLowerCase().includes(cari) && !t.simbol.toLowerCase().includes(cari) && !t.address.toLowerCase().includes(cari)) return false;
+      
+      // Risk Filter
+      if (filter.riskLevel && filter.riskLevel !== 'ALL') {
+        if (!t.risk || t.risk.score !== filter.riskLevel) return false;
+      }
+
       if (t.liquidity < filter.liquidityMin) return false;
       if (t.liquidity > filter.liqMax) return false;
       if (t.volume24h < filter.volumeMin) return false;

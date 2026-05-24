@@ -54,16 +54,6 @@ input::-webkit-inner-spin-button {
   margin: 0;
 }
 
-/* Hide specific export button as requested */
-body > div > div:nth-child(2) > div:nth-child(2) > button:nth-child(2) {
-  display: none !important;
-}
-
-/* Hide manual refresh button (3rd button) - already has auto-refresh */
-body > div > div:nth-child(2) > div:nth-child(2) > button:nth-child(3) {
-  display: none !important;
-}
-
 /* ─── Classic button ─── */
 .btn-classic {
   display: inline-flex;

@@ -9,6 +9,12 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@metaplex-foundation/mpl-token-metadata": "^3.4.0",
+    "@metaplex-foundation/umi": "^1.5.1",
+    "@metaplex-foundation/umi-bundle-defaults": "^1.5.1",
+    "@metaplex-foundation/umi-signer-wallet-adapters": "^1.5.1",
+    "@metaplex-foundation/umi-web3js-adapters": "^1.5.1",
+    "@pinata/sdk": "^2.1.0",
     "@raydium-io/raydium-sdk-v2": "^0.2.45-alpha",
     "@solana/spl-token": "^0.4.14",
     "@solana/wallet-adapter-base": "^0.9.27",
@@ -16,6 +22,7 @@
     "@solana/wallet-adapter-react-ui": "^0.9.39",
     "@solana/wallet-adapter-wallets": "^0.19.38",
     "@solana/web3.js": "^1.98.4",
+    "bn.js": "^5.2.1",
     "decimal.js": "^10.6.0",
     "next": "^14.2.35",
     "react": "^18.3.1",
