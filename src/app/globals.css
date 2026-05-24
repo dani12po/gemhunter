@@ -118,6 +118,97 @@ input::-webkit-inner-spin-button {
 .wallet-adapter-button:hover { background: #404040 !important; }
 .wallet-adapter-button-trigger { background: var(--accent-dim) !important; }
 
+/* ─── Wallet Modal override ─── */
+.wallet-adapter-modal-wrapper {
+  background: #1e1e1e !important;
+  border: 1px solid #3a3a3a !important;
+  border-top: 2px solid #f5a623 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.8) !important;
+}
+
+.wallet-adapter-modal-title {
+  color: #e8e8e8 !important;
+  font-family: 'Trebuchet MS', Verdana, sans-serif !important;
+  font-size: 16px !important;
+  font-weight: bold !important;
+}
+
+.wallet-adapter-modal-list {
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.wallet-adapter-modal-list li {
+  border-bottom: 1px solid #2a2a2a !important;
+}
+
+.wallet-adapter-modal-list-more-icon-rotate {
+  fill: #f5a623 !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button {
+  background: #242424 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  height: 52px !important;
+  padding: 0 16px !important;
+  width: 100% !important;
+  justify-content: flex-start !important;
+  gap: 12px !important;
+  font-size: 13px !important;
+  color: #e8e8e8 !important;
+  transition: background 0.15s !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button:hover {
+  background: #2e2e2e !important;
+  color: #f5a623 !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button-end-icon,
+.wallet-adapter-modal-list .wallet-adapter-button-start-icon {
+  display: flex !important;
+  align-items: center !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button-end-icon span {
+  color: #5cb85c !important;
+  font-size: 11px !important;
+  font-weight: bold !important;
+}
+
+.wallet-adapter-modal-overlay {
+  background: rgba(0, 0, 0, 0.75) !important;
+  backdrop-filter: blur(2px) !important;
+}
+
+.wallet-adapter-modal-button-close {
+  background: #2e2e2e !important;
+  border: 1px solid #444 !important;
+  border-radius: 50% !important;
+}
+
+.wallet-adapter-modal-button-close:hover {
+  background: #3a3a3a !important;
+}
+
+.wallet-adapter-modal-button-close svg {
+  fill: #aaa !important;
+}
+
+/* Collapse button */
+.wallet-adapter-collapse-button {
+  background: #1e1e1e !important;
+  border-top: 1px solid #2a2a2a !important;
+  color: #888 !important;
+  font-size: 11px !important;
+}
+
+.wallet-adapter-collapse-button:hover {
+  color: #f5a623 !important;
+}
+
 /* ─── Utility ─── */
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
