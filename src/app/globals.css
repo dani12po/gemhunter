@@ -248,3 +248,95 @@ html, body { overflow-x: hidden; }
   .filter-inputs { grid-template-columns: 1fr 1fr; }
   .header-nav a { padding: 8px 8px !important; font-size: 10px !important; }
 }
+
+/* ── Header responsive ── */
+.desktop-nav { display: flex !important; }
+.hamburger-btn { display: none !important; }
+.mobile-menu { display: none; }
+
+@media (max-width: 768px) {
+  .desktop-nav { display: none !important; }
+  .hamburger-btn { display: flex !important; }
+  .mobile-menu { display: flex !important; }
+}
+
+/* ── Stats bar responsive ── */
+.stats-bar {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  margin-bottom: 20px;
+}
+@media (max-width: 768px) {
+  .stats-bar { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+}
+@media (max-width: 480px) {
+  .stats-bar { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+}
+
+/* ── Token grid responsive ── */
+.token-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 24px;
+}
+@media (max-width: 900px) {
+  .token-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px) {
+  .token-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Filter inputs responsive ── */
+.filter-inputs {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+@media (max-width: 900px) {
+  .filter-inputs { grid-template-columns: repeat(4, 1fr); }
+}
+@media (max-width: 560px) {
+  .filter-inputs { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ── Token card header ── */
+.token-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #2e2e2e;
+  border-bottom: 1px solid #3a3a3a;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.token-card-left  { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; flex: 1; }
+.token-card-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* ── Liquidity page ── */
+.liquidity-grid {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 24px;
+}
+@media (max-width: 768px) {
+  .liquidity-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Create token page ── */
+.create-token-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+}
+@media (max-width: 768px) {
+  .create-token-grid { grid-template-columns: 1fr; }
+}
+
+/* ── Page content top padding ── */
+.page-content-scanner { padding-top: 96px; }
+@media (max-width: 768px) {
+  .page-content-scanner { padding-top: 80px; }
+}
