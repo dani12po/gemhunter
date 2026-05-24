@@ -9,15 +9,22 @@ import { clusterApiUrl } from '@solana/web3.js';
 
 require('@solana/wallet-adapter-react-ui/styles.css');
 
+// RPC endpoints dari env — fallback ke public endpoints
+const MAINNET_RPC = process.env.NEXT_PUBLIC_RPC_URL || 'https://api.mainnet-beta.solana.com';
+const DEVNET_RPC  = process.env.NEXT_PUBLIC_DEVNET_RPC_URL || 'https://api.devnet.solana.com';
+
+// Default network dari env — default mainnet-beta jika tidak diset
+const DEFAULT_NETWORK = (process.env.NEXT_PUBLIC_NETWORK as WalletAdapterNetwork)
+  || WalletAdapterNetwork.Mainnet;
+
 export const SolanaProvider = ({ children }: { children: React.ReactNode }) => {
-  // Bisa diubah via .env.local → NEXT_PUBLIC_NETWORK=devnet
-  const network = (process.env.NEXT_PUBLIC_NETWORK as WalletAdapterNetwork) || WalletAdapterNetwork.Devnet;
+  // Gunakan network dari env sebagai default
+  // Wallet adapter akan otomatis terhubung ke jaringan yang dipilih user di wallet mereka
+  const network = DEFAULT_NETWORK;
 
   const endpoint = useMemo(() => {
-    // Prioritas: custom RPC > cluster default
-    if (process.env.NEXT_PUBLIC_RPC_URL) {
-      return process.env.NEXT_PUBLIC_RPC_URL;
-    }
+    if (network === WalletAdapterNetwork.Mainnet) return MAINNET_RPC;
+    if (network === WalletAdapterNetwork.Devnet)  return DEVNET_RPC;
     return clusterApiUrl(network);
   }, [network]);
 

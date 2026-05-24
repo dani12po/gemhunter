@@ -32,6 +32,7 @@ import {
 import type { DexProvider } from '../../lib/dex';
 import { DEX_ADAPTERS, executeCreatePool, executeAddLiquidity, executeRemoveLiquidity } from '../../lib/dex';
 import Decimal from 'decimal.js';
+import { useWalletNetwork } from '../../hooks/useWalletNetwork';
 
 // Set high precision for financial calculations
 Decimal.set({ precision: 30 });
@@ -380,10 +381,18 @@ async function scanWalletLpPools(
 export default function LiquidityPage() {
   const { connection }                            = useConnection();
   const { publicKey, sendTransaction, signTransaction, connected } = useWallet();
+  const { network: walletNetwork, label: networkLabel } = useWalletNetwork();
 
+  // Sync network state with wallet's actual network
   const [network, setNetwork] = useState<NetworkMode>(
     (process.env.NEXT_PUBLIC_NETWORK as NetworkMode) === 'mainnet-beta' ? 'mainnet' : 'devnet'
   );
+
+  // Auto-update when wallet network changes
+  useEffect(() => {
+    if (walletNetwork === 'mainnet-beta') setNetwork('mainnet');
+    else if (walletNetwork === 'devnet') setNetwork('devnet');
+  }, [walletNetwork]);
   const [activeTab, setActiveTab]   = useState<PageTab>('add');
   const [isSwapOpen, setIsSwapOpen] = useState(false);
   const [selectedDex, setSelectedDex] = useState<DexProvider>('raydium');
@@ -992,17 +1001,19 @@ export default function LiquidityPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div>
             <h1 style={{ fontSize: 20, fontWeight: 'bold', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: '#f5a623' }}>💧</span> Liquidity Pool
+              Liquidity Pool
               <span style={{ fontSize: 10, background: '#222', padding: '2px 6px', borderRadius: 4, color: '#666', fontWeight: 'normal' }}>v2.1</span>
             </h1>
-            <p style={{ color: '#666', fontSize: 12, margin: '2px 0 0' }}>Raydium CPMM Manager • {network.toUpperCase()}</p>
+            <p style={{ color: '#666', fontSize: 12, margin: '2px 0 0' }}>Raydium CPMM Manager</p>
           </div>
-          <button
-            onClick={() => setNetwork(n => n === 'devnet' ? 'mainnet' : 'devnet')}
-            style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #333', background: '#1a1a1a', color: network === 'devnet' ? '#5cb85c' : '#f5a623', fontSize: 11, cursor: 'pointer', fontWeight: 'bold' }}
-          >
-            {network === 'devnet' ? '● DEVNET' : '● MAINNET'}
-          </button>
+          <span style={{
+            fontSize: 11, fontWeight: 'bold', padding: '4px 10px', borderRadius: 6,
+            background: network === 'mainnet' ? '#1a2a0a' : '#1a1a2a',
+            border: `1px solid ${network === 'mainnet' ? '#5cb85c' : '#5b9bd5'}`,
+            color: network === 'mainnet' ? '#5cb85c' : '#5b9bd5',
+          }}>
+            {networkLabel || (network === 'mainnet' ? 'Mainnet' : 'Devnet')}
+          </span>
         </div>
 
         {/* TAB BUTTONS */}

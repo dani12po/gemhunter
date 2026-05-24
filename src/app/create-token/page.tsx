@@ -271,9 +271,6 @@ export default function CreateTokenPage() {
           <h1 style={{ fontSize: 28, fontWeight: 'bold', color: '#e8e8e8', marginBottom: 8 }}>
             Create SPL Token{' '}
             <span style={{ fontSize: 10, background: '#333', padding: '2px 6px', borderRadius: 4, verticalAlign: 'middle', color: '#888' }}>v2.0</span>
-            <span style={{ fontSize: 14, color: '#f5a623', marginLeft: 12, fontWeight: 'normal' }}>
-              ({process.env.NEXT_PUBLIC_NETWORK?.toUpperCase() || 'DEVNET'})
-            </span>
           </h1>
           <p style={{ color: '#888', fontSize: 13 }}>
             Luncurkan token Solana kamu sendiri dengan Logo & Metadata IPFS

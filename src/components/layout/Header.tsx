@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import dynamic from 'next/dynamic';
+import { useWalletNetwork } from '../../hooks/useWalletNetwork';
 
 const WalletMultiButtonDynamic = dynamic(
   async () => (await import('@solana/wallet-adapter-react-ui')).WalletMultiButton,
@@ -36,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const pathname = usePathname();
   const [mounted, setMounted] = useState(false);
+  const { network, label } = useWalletNetwork();
 
   useEffect(() => {
     setMounted(true);
@@ -83,6 +85,17 @@ export const Header: React.FC<HeaderProps> = ({
           </nav>
 
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+            {/* Network badge — auto-detected from wallet */}
+            {mounted && label && (
+              <span style={{
+                fontSize: 10, fontWeight: 'bold', padding: '2px 8px', borderRadius: 4,
+                background: network === 'mainnet-beta' ? '#1a2a0a' : network === 'devnet' ? '#1a1a2a' : '#2a1a0a',
+                border: `1px solid ${network === 'mainnet-beta' ? '#5cb85c' : network === 'devnet' ? '#5b9bd5' : '#f5a623'}`,
+                color: network === 'mainnet-beta' ? '#5cb85c' : network === 'devnet' ? '#5b9bd5' : '#f5a623',
+              }}>
+                {label}
+              </span>
+            )}
             {mounted && <WalletMultiButtonDynamic className="btn-classic" />}
           </div>
         </div>
